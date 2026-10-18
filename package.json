@@ -1,0 +1,21 @@
+{
+	"name": "pi-agent-substrate",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Always-on Pi agents on Agent Substrate",
+	"type": "module",
+	"license": "Apache-2.0",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "npm run build && NODE_ENV=test node --test dist/test/m1.test.js",
+		"demo:echo": "npm run build && NODE_ENV=test node dist/test/demo/echo-demo.js"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.0",
+		"typescript": "^5.7.0"
+	}
+}

@@ -1,4 +1,6 @@
 // Formatting adapted from Vercel Chat SDK service converters (MIT).
+// Copyright (c) 2026 Vercel, Inc. The full MIT notice is in the repository's
+// THIRD_PARTY_NOTICES.md.
 // Source inspiration:
 // - packages/adapter-telegram/src/markdown.ts
 // - packages/adapter-discord/src/markdown.ts

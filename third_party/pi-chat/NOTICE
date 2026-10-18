@@ -1,0 +1,11 @@
+pi-chat
+https://github.com/earendil-works/pi-chat
+
+Copyright the pi-chat authors.
+
+Licensed under the Apache License, Version 2.0. A copy of the license is in
+this directory as LICENSE.
+
+This directory contains a modified subset of pi-chat at commit
+9adbd29b40ee27ff1decf0fc87cbe180b40924f5. Modified files are marked at the
+top of the file. See README.md for the file list and the changes.

@@ -90,6 +90,11 @@ The recovery path never replays a completed turn.
 is not imported by anything under `src/`, so production entry points cannot
 reach it.
 
+## License
+
+Apache-2.0. Vendored code and the notices that ship with it are listed in
+`THIRD_PARTY_NOTICES.md`.
+
 ## Provenance
 
 The conversation runtime is a vendored pi-chat subset. See

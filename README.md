@@ -8,6 +8,11 @@ This repository is at milestone **M1**. It does not need a cluster yet: the
 gateway, the conversation log, and the restart recovery path run and are tested
 on a workstation.
 
+## Design
+
+The design baseline, including implementation status, is
+[docs/pi-always-on-agent.md](docs/pi-always-on-agent.md).
+
 ## M1 scope
 
 M1 extracts the channel and conversation runtime from pi-chat into a standalone

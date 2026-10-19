@@ -17,9 +17,9 @@ containers:
   image: ${ACTOR_IMAGE}
   env:
   - name: PI_PROVIDER
-    value: mock
+    value: '${PROVIDER}'
   - name: PI_MODEL
-    value: mock-model
+    value: '${MODEL_ID}'
   - name: PI_MODELS_JSON
     value: '${MODELS_JSON}'
   # Actor egress only passes the urls an EgressPolicy allows; Pi's startup

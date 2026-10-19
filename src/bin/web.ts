@@ -116,6 +116,9 @@ const specFor = (conversationId: string): ConversationSpec => ({
 const server = await startWebServer({
 	manager,
 	port: Number(process.env.PI_WEB_PORT ?? 8788),
+	// The page has no authentication. Loopback keeps it private; binding wider
+	// is a deliberate choice for a trusted network.
+	host: process.env.PI_WEB_HOST ?? "127.0.0.1",
 	specFor,
 	log: (message) => console.error(`[web] ${message}`),
 });

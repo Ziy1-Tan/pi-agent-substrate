@@ -63,6 +63,21 @@ PI_ACTOR_URL=ws://127.0.0.1:8000 PI_IDLE_SECONDS=60 \
 
 `PI_IDLE_SECONDS=0` disables the idle lifecycle. `PI_ACTOR_TEMPLATE`,
 `PI_EGRESS_POLICY`, and `KUBECTL_ATE` / `KUBE_CONTEXT` configure actor creation.
+The page listens on `127.0.0.1` by default; set `PI_WEB_HOST=0.0.0.0` to reach it
+from another device, and remember it has no authentication.
+
+For a single-user setup that talks to a real provider, `hack/deploy-local.sh`
+builds the actor image, creates a template from one provider in
+`~/.pi/agent/models.json`, and prints the gateway command:
+
+```sh
+PROVIDER=tokenhub PI_MODEL=deepseek-v4-pro ./hack/deploy-local.sh
+```
+
+A template pins its image by the digest of the **platform** manifest, not the
+multi-arch index: a node that pulls the index can end up with a partial image
+whose container never starts, and the only symptom is a crash and a wakeup
+probe timeout. The script resolves the child digest for you.
 
 ## Layout
 

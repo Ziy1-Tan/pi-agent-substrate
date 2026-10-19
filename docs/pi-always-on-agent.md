@@ -502,4 +502,18 @@ e2e 分三层，职责不同。
   - `hack/e2e-web.mjs` 增加 curl 断言：`POST /messages` 在集群上返回 mock 模型的结算回复。
   - Telegram 侧用 Bot API 桩验证：一条回合是一次 sendMessage 加若干 editMessageText、超长回复分条、预览节流、编辑失败回退、chat 映射与回复落点。
   - 本机对 kind 集群实测 curl：首个回合 4.64 秒（建 actor + 冷启动），同一 actor 后续回合 0.31 秒；空闲 10 秒后 `ACTOR_STATE_SUSPENDED`，持续观察 20 秒保持挂起；下一条 curl 0.81 秒返回，`resumed_turns` 为 1。
+- [x] Telegram 入口的集群实测（Bot API 桩，真实 actor 与 router）：
+  - 一条消息进来，网关创建 `pi-telegram-<chat id>` 的 actor 并应用 egress 策略；回复先以 `sendMessage` 出现流式首段，再以 `editMessageText` 收尾。
+  - 空闲 12 秒后 `ACTOR_STATE_SUSPENDED`；期间持续观察仍保持挂起。
+  - 下一条消息让 actor 回到 `ACTOR_STATE_RUNNING`，回复落在同一 chat；`/metrics` 记 `turns=2`、`suspends=1`、`resumed_turns=1`，`resume_millis` P50 801 毫秒。
+- [x] 本地自用的部署收拢：
+  - `hack/deploy-local.sh` 用本机 `~/.pi/agent/models.json` 里的单个 provider 建 `pi-local` 模板，并把 `deploy/local/egress-policy.yaml` 挂到 actor 上。
+  - 模板必须按**平台子 manifest** 的 digest 固定：`docker inspect` 返回的是多架构 index digest，节点按它拉会得到残缺镜像，容器起不来、wakeup probe 超时，表现是 actor `CRASHED` 而不是一条明确的错误。
+  - `src/bin/web.ts` 默认监听 `127.0.0.1`；页面没有鉴权，只有显式设置 `PI_WEB_HOST=0.0.0.0` 才允许同网段访问。
 - [x] 未覆盖：真实 bot token 的端到端 smoke 需要外部网络与一个测试 bot，留作手动步骤；Discord 未实现，设计文档仍把它列为后续项。
+
+### 本地真实 provider 的已知阻塞
+
+- 这台 kind 集群的 egress 数据面对**公网域名**不生效：策略在 API 层接受（`get egress-policy` 能读回规则），但 `atenet-egress` 对 `tokenhub.tencentmaas.com:443` 报 `chain: denied, details: filter_chain_not_found`，actor 侧表现为 Pi 的 `Connection error.` 与空回复。
+- 换成 `api.github.com` 同样被拒，说明不是某个域名的问题；集群内 Service 域名（mock LLM）则正常。
+- 因此挂起/唤醒的完整闭环用 mock provider 验证；真实模型需要支持公网 egress 的集群（或在安装 substrate 时开启对应选项）。

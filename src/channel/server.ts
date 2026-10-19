@@ -19,6 +19,8 @@ import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
 export interface WebServerOptions {
 	manager: GatewayManager;
 	port?: number;
+	/** Listen address; defaults to 127.0.0.1 because there is no auth. */
+	host?: string;
 	/** Resolves a conversation id to its actor and lifecycle settings. */
 	specFor: (conversationId: string) => ConversationSpec;
 	/** Directory holding `ui.html`; defaults to the compiled module's folder. */
@@ -260,7 +262,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		}
 	}
 
-	server.listen(port, "0.0.0.0");
+	server.listen(port, options.host ?? "127.0.0.1");
 	await new Promise<void>((resolve, reject) => {
 		server.once("listening", () => resolve());
 		server.once("error", reject);

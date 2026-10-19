@@ -1,0 +1,18 @@
+# Local, single-user setup: the actor may reach the model provider and the
+# Telegram Bot API. Nothing else is allowed, so a leaked prompt cannot exfiltrate
+# to an arbitrary host.
+#
+# Replace the hostnames and ports when the provider changes. Telegram is listed
+# because the bot long-polls from the gateway, not from the actor; an actor that
+# runs `pi` only needs the model provider. Keeping the entry here is harmless
+# and documents the two endpoints a full setup uses.
+metadata:
+  atespace: pi-agents
+  name: default
+rules:
+- http:
+    hostnames:
+    - tokenhub.tencentmaas.com
+    ports:
+      numbers:
+      - 443

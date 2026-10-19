@@ -18,6 +18,10 @@
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
 #   WEB_PORT          port for the browser-channel e2e (default: 8899)
 #   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
+#   PROVIDER          "mock" (default) or "tokenhub"; a real provider needs
+#                     PI_MODELS_JSON and an egress policy that reaches it
+#   PI_MODELS_JSON    models.json for a real provider, inlined into the template
+#   EGRESS_POLICY     manifest applied to the actor (default: the mock policy)
 #   ONLY              "deploy" to skip the e2e, "e2e" to skip the deploy
 set -o errexit -o nounset -o pipefail
 
@@ -34,6 +38,9 @@ ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:8000}"
 IDLE_SECONDS="${IDLE_SECONDS:-15}"
 WEB_PORT="${WEB_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
+PROVIDER="${PROVIDER:-mock}"
+PI_MODELS_JSON="${PI_MODELS_JSON:-}"
+EGRESS_POLICY="${EGRESS_POLICY:-deploy/test/egress-policy.yaml}"
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -80,13 +87,29 @@ if [[ "${ONLY}" != "e2e" ]]; then
   WORKER_IMAGE="${WORKER_IMAGE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
     envsubst '${WORKER_IMAGE} ${MOCK_LLM_IMAGE}' < deploy/test/kind.yaml.tmpl | "${kube[@]}" apply -f -
 
-  "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
+  if [[ "${PROVIDER}" == "mock" ]]; then
+    "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
+  fi
   "${kube[@]}" -n "${ATESPACE}" rollout status deploy/pi-workerpool --timeout=180s
 
   echo "==> creating the actor template"
-  MODELS_JSON="$(node -e 'console.log(JSON.stringify({providers:{mock:{baseUrl:"http://mock-llm.'"${ATESPACE}"'.svc.cluster.local:8080/v1",api:"openai-completions",apiKey:"mock",compat:{supportsDeveloperRole:false,supportsReasoningEffort:false,supportsUsageInStreaming:false},models:[{id:"mock-model",name:"mock",contextWindow:100000,maxTokens:4096}]}}}))')"
+  if [[ "${PROVIDER}" == "mock" ]]; then
+    MODELS_JSON="$(node -e 'console.log(JSON.stringify({providers:{mock:{baseUrl:"http://mock-llm.'"${ATESPACE}"'.svc.cluster.local:8080/v1",api:"openai-completions",apiKey:"mock",compat:{supportsDeveloperRole:false,supportsReasoningEffort:false,supportsUsageInStreaming:false},models:[{id:"mock-model",name:"mock",contextWindow:100000,maxTokens:4096}]}}}))')"
+    MODEL_ID="mock-model"
+  else
+    # A real provider's catalog is too large to paste into this script, so the
+    # caller supplies the same models.json Pi reads on the workstation.
+    if [[ -z "${PI_MODELS_JSON}" ]]; then
+      echo "PROVIDER=${PROVIDER} needs PI_MODELS_JSON" >&2
+      exit 1
+    fi
+    MODELS_JSON="$(cat "${PI_MODELS_JSON}")"
+    MODEL_ID="${PI_MODEL:-deepseek-v4-pro}"
+  fi
   sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
       -e "s#\${MODELS_JSON}#${MODELS_JSON}#" \
+      -e "s#\${PROVIDER}#${PROVIDER}#" \
+      -e "s#\${MODEL_ID}#${MODEL_ID}#" \
       deploy/test/actor-template.json.tmpl > bin/actor-template.json
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.json
 

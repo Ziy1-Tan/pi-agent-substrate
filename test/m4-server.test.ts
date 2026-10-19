@@ -134,12 +134,18 @@ test("reconnecting with a cursor replays the missed frames without duplicates", 
 	const first = await connect(server.port, "local/chat");
 	await first.waitFor((frame) => frame.type === "hello", "hello");
 
-	// Drop the socket as soon as the stream is under way, then resume from the
-	// last sequence the client actually saw.
+	// Drop the socket once the stream is clearly under way, then resume from
+	// the last sequence the client actually saw. Waiting for a second preview
+	// guarantees there is a missed frame to replay: the reply is chunked, so
+	// the first preview alone can land after the client already has the tail.
 	first.send({ type: "message", text: "drop me mid stream" });
-	const early = await first.waitFor((frame) => frame.type === "preview", "first preview");
+	await first.waitFor(
+		() => first.frames.filter((frame) => frame.type === "preview").length >= 2,
+		"two previews",
+	);
+	const early = first.frames.find((frame) => frame.type === "preview");
 	first.socket.close();
-	const seenUpTo = early.seq ?? 0;
+	const seenUpTo = early?.seq ?? 0;
 
 	const resumed = await connect(server.port, "local/chat", seenUpTo);
 	t.after(() => resumed.socket.close());

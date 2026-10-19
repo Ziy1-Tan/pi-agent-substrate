@@ -8,7 +8,6 @@ export interface TelegramChannelOptions {
 	/** Streaming edits are rate limited by the platform, so previews wait. */
 	previewIntervalMs?: number;
 	fetchImpl?: typeof fetch;
-	log?: (message: string) => void;
 }
 
 const TELEGRAM_TEXT_LIMIT = 4_096;

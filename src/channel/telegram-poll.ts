@@ -46,7 +46,6 @@ export class TelegramPoll {
 	private readonly fetchImpl: typeof fetch;
 	private readonly log: (message: string) => void;
 	private offset = 0;
-	private running = false;
 
 	constructor(manager: GatewayManager, options: TelegramPollOptions) {
 		this.manager = manager;
@@ -68,8 +67,7 @@ export class TelegramPoll {
 	}
 
 	async run(signal?: AbortSignal): Promise<void> {
-		this.running = true;
-		while (this.running && !signal?.aborted) {
+		while (!signal?.aborted) {
 			try {
 				const updates = await this.getUpdates(this.offset, this.options.pollTimeoutSeconds ?? 30);
 				for (const update of updates) {
@@ -82,10 +80,6 @@ export class TelegramPoll {
 				await sleep(1_000);
 			}
 		}
-	}
-
-	stop(): void {
-		this.running = false;
 	}
 
 	private async handle(update: TelegramUpdate): Promise<void> {

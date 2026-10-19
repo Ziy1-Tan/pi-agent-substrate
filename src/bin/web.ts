@@ -101,7 +101,6 @@ const manager = new GatewayManager({
 					botToken: telegramToken,
 					chatId: conversation.conversationId.slice("telegram/".length),
 					apiBase: telegramApi,
-					log: (message) => console.error(`[telegram] ${message}`),
 				})
 			: undefined,
 	log: (message) => console.error(`[gateway] ${message}`),
@@ -137,7 +136,6 @@ if (telegramToken) {
 	});
 	await poll.skipBacklog();
 	void poll.run(stop.signal);
-	stop.signal.addEventListener("abort", () => poll.stop());
 }
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {

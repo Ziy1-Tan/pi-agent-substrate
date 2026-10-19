@@ -23,11 +23,6 @@ export interface WebServerOptions {
 	specFor: (conversationId: string) => ConversationSpec;
 	/** Directory holding `ui.html`; defaults to the compiled module's folder. */
 	uiDir?: string;
-	/**
-	 * Called once per conversation whose turn has just started or settled, so
-	 * the caller can mirror the state into another channel.
-	 */
-	onTurnState?: (conversationId: string, state: "started" | "settled") => void;
 	log?: (message: string) => void;
 }
 

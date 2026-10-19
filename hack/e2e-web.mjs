@@ -210,8 +210,15 @@ async function main() {
 
 		// Drop the socket mid-stream, then resume from the last frame received.
 		alpha.send({ type: "message", text: "drop this stream halfway" });
-		const early = await alpha.waitFor((frame) => frame.type === "preview", 120_000, "a preview");
-		const seenUpTo = early.seq ?? 0;
+		// Wait for a second preview so there is definitely a missed frame to
+		// replay; the first one can arrive after the stream is already done.
+		await alpha.waitFor(
+			(frame) => frame.type === "preview" && alpha.frames.filter((entry) => entry.type === "preview").length >= 2,
+			120_000,
+			"two previews",
+		);
+		const early = alpha.frames.find((frame) => frame.type === "preview");
+		const seenUpTo = early?.seq ?? 0;
 		alpha.socket.close();
 		const resumed = connect(alphaId, seenUpTo);
 		clients.push(resumed);
@@ -247,6 +254,14 @@ async function main() {
 
 		// A kind WorkerPool is small, so the second conversation runs after the
 		// first one has suspended. It still gets its own actor and its own log.
+		// The lifecycle reports the suspend as soon as the control plane
+		// accepts it; the worker is only free once the actor is actually down.
+		await waitFor(
+			() => actorState(actorNameFor(alphaId)),
+			(state) => state === "ACTOR_STATE_SUSPENDED",
+			(idleSeconds + 40) * 1000,
+			"alpha to leave its worker",
+		);
 		const beta = connect(betaId);
 		clients.push(beta);
 		await beta.open();

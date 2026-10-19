@@ -26,7 +26,7 @@ test("actor names are deterministic and legal", () => {
 	assert.equal(actorNameFor("local/chat"), actorNameFor("local/chat"));
 });
 
-test("a reconnect replays only the deltas it missed", async (t) => {
+test("a reconnect replays only the frames it missed", async (t) => {
 	const root = await tempRoot(t);
 	const conversation = await createConversation(root, "local/chat");
 	const channel = new WebChannel({
@@ -47,7 +47,7 @@ test("a reconnect replays only the deltas it missed", async (t) => {
 	await gateway.receive({ userId: "u", userName: "alice", text: "replay this" });
 	await gateway.waitForIdle();
 
-	assert.ok(delivered.length > 2, "deltas plus the final event were recorded");
+	assert.ok(delivered.length > 2, "previews plus the final event were recorded");
 	const lastLive = delivered.at(-1) ?? 0;
 	const seen = delivered[Math.floor(delivered.length / 2)] ?? 0;
 
@@ -152,7 +152,6 @@ test("the manager keeps one actor per conversation and isolates failures", async
 		manager.receive("local/missing", { userId: "u", text: "hi" }),
 		/unknown conversation/,
 	);
-	assert.deepEqual(manager.list().sort(), ["local/a", "local/b"]);
 
 	await manager.close();
 });

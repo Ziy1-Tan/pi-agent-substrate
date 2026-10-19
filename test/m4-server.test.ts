@@ -107,7 +107,7 @@ test("the page and metrics endpoints are served", async (t) => {
 	assert.deepEqual(body.timings, {});
 });
 
-test("a browser turn streams deltas and ends with the final text", async (t) => {
+test("a browser turn streams previews and ends with the final text", async (t) => {
 	const { server } = await setup(t);
 	const client = await connect(server.port, "local/chat");
 	t.after(() => client.socket.close());
@@ -129,7 +129,7 @@ test("a browser turn streams deltas and ends with the final text", async (t) => 
 	assert.deepEqual(sequences, [...sequences].sort((a, b) => a - b), "sequence numbers arrive in order");
 });
 
-test("reconnecting with a cursor replays the missed deltas without duplicates", async (t) => {
+test("reconnecting with a cursor replays the missed frames without duplicates", async (t) => {
 	const { server } = await setup(t);
 	const first = await connect(server.port, "local/chat");
 	await first.waitFor((frame) => frame.type === "hello", "hello");
@@ -149,7 +149,7 @@ test("reconnecting with a cursor replays the missed deltas without duplicates", 
 	const replayed = resumed.frames.filter((frame) => frame.type === "preview").map((frame) => frame.seq ?? 0);
 	assert.ok(replayed.length > 0, "the missed previews were replayed");
 	assert.equal(Math.min(...replayed), seenUpTo + 1, "replay begins right after the last seen sequence");
-	assert.equal(new Set(replayed).size, replayed.length, "no delta is delivered twice");
+	assert.equal(new Set(replayed).size, replayed.length, "no frame is delivered twice");
 
 	const final = await resumed.waitFor((frame) => frame.type === "final", "final after reconnect");
 	assert.equal(final.text, "Echo: drop me mid stream");

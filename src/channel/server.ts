@@ -114,7 +114,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		client.on("close", () => channel.offEvent(listener));
 
 		// Replay only the window the client missed. A gap older than the ring
-		// means the client cannot reconstruct the stream from deltas alone, so
+		// means the client cannot reconstruct the stream from previews alone, so
 		// it gets the recorded history instead and restarts from the tail.
 		if (channel.hasGap(since)) {
 			send(client, {
@@ -174,13 +174,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			}
 			if (type === "status") {
 				send(client, { type: "status", ...(entry.gateway.status() ?? {}) });
-				return;
-			}
-			if (type === "history") {
+			} else if (type === "history") {
 				entry.channel.recordHistory(entry.gateway.history(Number(command.limit) || 50));
-				return;
+			} else {
+				send(client, { type: "error", text: `unknown command: ${type}` });
 			}
-			send(client, { type: "error", text: `unknown command: ${type}` });
 		} catch (error) {
 			const message = describe(error);
 			entry.channel.recordError(message, typeof command.messageId === "string" ? command.messageId : undefined);

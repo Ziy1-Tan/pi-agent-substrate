@@ -476,5 +476,5 @@ e2e 分三层，职责不同。
 - [x] 验证：
   - `npm test` 34 个用例（在 M3 基础上加 web 频道/重放/附件/指标 6 个、HTTP+WebSocket 服务 5 个）。
   - `hack/e2e-kind.sh` 追加 `hack/e2e-web.mjs`，18/18：页面与 `/metrics` 可访问、流式回复、`since` 重放无重复无缺口、无手动命令自动挂起、下一条消息自动 resume、第二个会话拿到不同 actor 且互不串流、计数器与延迟均已记录。
-  - 本机测量（idle 12 秒）：`resume_millis` P50 1172 毫秒；`turn_millis` P50 1366 毫秒、P95 4944 毫秒（P95 包含冷启动与 resume 回合）。
+  - 本机测量（idle 12 秒）：`resume_millis` P50 1172–2642 毫秒（两次运行）；`turn_millis` P50 1366–2869 毫秒，P95 最高 13690 毫秒（P95 含冷启动与 resume 回合，第一次拉取 actor 镜像/快照时明显更高）。
 - [x] 未覆盖（设计文档里保留为后续项）：真实 Telegram/Discord 频道 smoke、100 次 suspend/resume soak、失败注入矩阵、密度测量。这些需要真实频道与更大的 WorkerPool；当前 kind 环境只有 1 个 worker，本 e2e 因此把两个会话串行执行。

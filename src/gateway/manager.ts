@@ -1,9 +1,8 @@
 import { PiBackend } from "../backend/pi.js";
 import type { ResolvedConversation } from "../../third_party/pi-chat/types.js";
-import type { AgentBackend } from "./types.js";
-import { createConversation } from "../gateway/conversations.js";
-import { Gateway } from "../gateway/gateway.js";
-import type { InboundMessageInput } from "../gateway/types.js";
+import type { AgentBackend, InboundMessageInput } from "./types.js";
+import { createConversation } from "./conversations.js";
+import { Gateway } from "./gateway.js";
 import { IdleLifecycle } from "../lifecycle/idle.js";
 import type { ActorControl, ActorRef } from "../lifecycle/types.js";
 import { Metrics } from "../metrics.js";
@@ -81,10 +80,6 @@ export class GatewayManager {
 	/** The conversation's channel, once it is open. */
 	get(conversationId: string): WebChannel | undefined {
 		return this.entries.get(conversationId)?.channel;
-	}
-
-	list(): string[] {
-		return [...this.entries.keys()];
 	}
 
 	/** Opens a conversation on first use; concurrent callers share the work. */
@@ -169,7 +164,6 @@ export class GatewayManager {
 			lifecycle,
 			onTurn: (report) => {
 				this.metrics.increment("turns");
-				this.metrics.increment(`turns_${conversation.conversationId.replace(/[^a-z0-9]+/gi, "_")}`);
 				this.metrics.observe("turn_millis", report.turnMillis);
 				if (report.firstTokenMillis !== undefined) {
 					this.metrics.observe("first_token_millis", report.firstTokenMillis);

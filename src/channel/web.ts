@@ -27,16 +27,14 @@ export interface WebChannelOptions {
 	conversationId: string;
 	/** Where uploads land before the runtime files them under `incoming/`. */
 	filesDir: string;
-	/** Receives every event with its sequence number. */
-	onEvent?: (event: Sequenced<WebChannelEvent>) => void;
 }
 
 /**
  * Channel over a browser WebSocket.
  *
- * The gateway calls `syncPreview` for each streamed delta and `send` once per
+ * The gateway calls `syncPreview` for each streamed update and `send` once per
  * turn. Both become sequenced events, so a client that reconnects with
- * `since=<seq>` gets exactly the deltas it missed and nothing it already saw.
+ * `since=<seq>` gets exactly the frames it missed and nothing it already saw.
  * Uploads are written before the runtime sees them; the runtime then copies
  * them under the conversation's `incoming/` directory and the prompt names
  * them, which is the same path a Slack or Discord attachment takes.
@@ -54,7 +52,6 @@ export class WebChannel implements Channel {
 	constructor(options: WebChannelOptions) {
 		this.conversationId = options.conversationId;
 		this.filesDir = options.filesDir;
-		if (options.onEvent) this.listeners.add(options.onEvent);
 	}
 
 	/** Every connected browser receives the same sequenced event. */

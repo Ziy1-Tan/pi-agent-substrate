@@ -4,7 +4,7 @@
  * A browser can drop its socket in the middle of a stream. On reconnect it
  * says "I have seen up to sequence N"; the buffer replays everything after N
  * and then live delivery continues. Sequence numbers are assigned once, when
- * an event is recorded, so a replayed delta is byte-identical to the live one
+ * an event is recorded, so a replayed frame is byte-identical to the live one
  * and a client can de-duplicate on its own if it reconnects twice.
  */
 

@@ -1,4 +1,4 @@
-# Notes for agents working in this repository
+# Pi-agent-substrate
 
 Runtime traps from running against a live kind cluster; architecture is in
 [docs/architecture.md](docs/architecture.md).
@@ -18,9 +18,8 @@ an `http` rule leaves `sniRules: 0` and the handshake fails with
 
 ### An `https` rule requires trusting the egress CA
 
-TLS terminates at the gateway,
-which mints a leaf from its own CA that chains to no public root. Mount the
-projected bundle:
+TLS terminates at the gateway, which mints a leaf from its own CA that chains
+to no public root. Mount the projected bundle:
 
 ```yaml
 volumes:

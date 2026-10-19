@@ -21,34 +21,23 @@ Telegram / curl / browser
 
 ## Why
 
-An agent is idle most of the time. Keeping a process resident for the few
-minutes a day you talk to it wastes the machine; killing it loses the
-conversation. This project maps each conversation to its own suspendable
-Substrate actor: the gateway stays up because that is what holds the chat
-connection, and the actor sleeps between turns with its memory, files, and Pi
-session intact.
-
-Sending a message is the only thing that wakes an actor. There is no resume
-command and no warm-up step.
+An agent is idle most of the time. A resident process wastes the machine;
+killing it loses the conversation. Here each conversation maps to its own
+suspendable actor: the gateway stays up to hold the chat connection, and the
+actor sleeps between turns with its files and Pi session intact. Sending a
+message is the only thing that wakes it.
 
 ## What you get
 
-- **Three entry points, one conversation model.** Telegram, `curl`, and a
-  browser page all address the same `account/channel` id, so a conversation
-  started from a phone continues from a terminal.
-- **Streaming replies.** Telegram gets edits of one message; the browser gets
-  preview frames; `curl` gets the settled reply in the response body.
-- **Automatic suspend and resume.** A turn settles, an idle window passes, the
-  actor is snapshotted and releases its worker. The next message resumes it
-  with the session and `/workspace` intact.
-- **One actor per conversation.** No shared context, no cross-talk, and one
-  conversation failing does not take the others down.
-- **Attachments.** Images and files land in `/workspace/incoming` and appear in
-  the prompt.
-- **Reconnect replay.** A browser that drops mid-stream resumes with a cursor
-  and receives exactly the frames it missed.
-- **Visible failures.** A provider error is delivered as an error, not as an
-  empty reply.
+- Three entry points over one conversation model: Telegram, `curl`, and a
+  browser page address the same `account/channel` id.
+- Streaming replies: Telegram edits one message, the browser gets preview
+  frames, `curl` gets the settled reply in the response body.
+- Automatic suspend and resume with the session and `/workspace` intact.
+- One actor per conversation, so failures and context stay isolated.
+- Attachments land in `/workspace/incoming` and appear in the prompt.
+- Reconnect replay with a cursor: exactly the missed frames, no gaps.
+- Provider failures surface as errors, not empty replies.
 
 ## Quickstart
 
@@ -58,46 +47,29 @@ Node.js 22 or newer, and a kind cluster with Agent Substrate installed
 (`hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`),
 a local registry on `localhost:5001`, and `kubectl-ate` on `PATH`.
 
-### Run it against a real model
+### Run it
 
 ```sh
-PROVIDER=tokenhub PI_MODEL=deepseek-v4-pro ./hack/deploy-local.sh
+PROVIDER=tokenhub PI_MODEL=deepseek-v4-pro ./hack/deploy-local.sh   # real model
+./hack/e2e-kind.sh                                                  # mock model
 ```
 
-The script builds the actor image, creates a template from one provider in
-`~/.pi/agent/models.json`, writes the API key to a Kubernetes Secret, and
-prints the command to start the gateway. Paste the command, fill in your bot
-token, and send the bot a message.
-
-The key never enters the actor: the template carries a placeholder and the
-egress gateway swaps in the real value on the way out.
-
-### Run it against a mock model
-
-No API key, no provider, no network:
-
-```sh
-./hack/e2e-kind.sh
-```
-
-This deploys a mock OpenAI-compatible server, runs the clustered end-to-end
-suite, and exercises suspend, resume, streaming, replay, and metrics.
+The first builds the actor image, creates a template, writes the API key to a
+Secret, and prints the gateway command. The second needs no key or network.
 
 ### Talk to it
 
-**Telegram**
+Telegram:
 
 ```sh
 PI_TELEGRAM_TOKEN=123:abc PI_TELEGRAM_CHATS=42 \
   node dist/src/bin/web.js
 ```
 
-Every chat becomes its own conversation (`telegram/<chat id>`), so a group and
-a DM never share an actor. `PI_TELEGRAM_CHATS` restricts who gets an answer;
-leaving it empty answers any chat. The bot skips the update backlog on startup,
-so restarting it does not answer messages from an outage.
+Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
+an answer; empty answers any chat.
 
-**curl**
+curl:
 
 ```sh
 curl -s localhost:8788/messages \
@@ -106,15 +78,7 @@ curl -s localhost:8788/messages \
 # {"conversation":"local/chat","messageId":"...","text":"..."}
 ```
 
-Attachments are base64 in an `attachments` array. A rejected turn is a non-2xx
-status with `{"error": "..."}`.
-
-**Browser**
-
-Open `http://127.0.0.1:8788/`. The picker lists `PI_CONVERSATIONS` and any
-conversation opened by another entry point; an unlisted id opens on first use.
-The page streams replies, shows the actor's lifecycle state, and reconnects
-without gaps.
+Browser: open `http://127.0.0.1:8788/`.
 
 ## Configuration
 
@@ -134,24 +98,20 @@ without gaps.
 
 ## How it works
 
-The gateway and the actor are separate processes that only talk over a
-WebSocket. The actor runs a bridge that exposes `pi --mode rpc` as JSONL
-records; the gateway owns the conversation log, the delivery queue, and the
-idle timer.
+The gateway and the actor are separate processes that talk over a WebSocket.
+The actor runs a bridge exposing `pi --mode rpc` as JSONL records; the gateway
+owns the conversation log, the queue, and the idle timer.
 
 ```text
 IDLE ──prompt──> ACTIVE ──settled──> GRACE ──idle──> SUSPENDING ──> SUSPENDED
-                                  ▲       │
-                                  └───────┘ prompt cancels the timer
 ```
 
-Two rules matter more than the rest. A suspend is never issued while a turn is
-in flight, because substrate cancels in-flight work rather than draining it.
-And nothing reconnects on its own: connecting wakes an actor, so an automatic
-reconnect after a suspend would immediately undo it.
+A suspend is never issued mid-turn, because substrate cancels in-flight work
+rather than draining it, and nothing reconnects on its own, because connecting
+is what wakes an actor.
 
-Design details, the delivery state machine, the protocol, and the reasoning
-behind each choice are in [docs/architecture.md](docs/architecture.md).
+Protocol, state machines, and the reasoning behind each choice are in
+[docs/architecture.md](docs/architecture.md).
 
 ## Development
 
@@ -161,8 +121,8 @@ npm test
 ```
 
 `npm test` typechecks, builds, and runs the acceptance tests. They start real
-`pi --mode rpc` children against a local mock provider, so no API key or
-cluster is needed. `PI_E2E_LOG=1` prints actor and transport logs.
+`pi --mode rpc` children against a local mock provider, so no key or cluster is
+needed. `PI_E2E_LOG=1` prints actor and transport logs.
 
 | Behaviour | Where it is verified |
 |---|---|
@@ -178,9 +138,8 @@ cluster is needed. `PI_E2E_LOG=1` prints actor and transport logs.
 | An upload survives the trip to `/workspace/incoming` | `test/uploads.test.ts` |
 | A provider failure reaches the user, and the actor still idles | `test/bridge.test.ts`, `test/gateway-lifecycle.test.ts` |
 
-Traps that cost real debugging time — egress rules, the trust bundle,
-credential injection, template immutability, image digests — are in
-[AGENTS.md](AGENTS.md). Read it before changing deployment manifests.
+Deployment traps are in [AGENTS.md](AGENTS.md); read it before changing
+manifests.
 
 ## Layout
 

@@ -11,6 +11,8 @@
 #   API             wire protocol, e.g. openai-completions
 #   CONTEXT_WINDOW  model context window
 #   MAX_TOKENS      model output limit
+#   SANDBOX_CLASS   SANDBOX_CLASS_GVISOR or SANDBOX_CLASS_MICROVM
+#   SANDBOX_CONFIG  cluster SandboxConfig name, e.g. gvisor-default or microvm
 metadata:
   atespace: pi-agents
   name: pi-actor
@@ -66,8 +68,8 @@ resources:
   - name: memory
     quantity: 1Gi
 sandboxConfig:
-  sandboxClass: SANDBOX_CLASS_GVISOR
-  configName: gvisor-default
+  sandboxClass: ${SANDBOX_CLASS}
+  configName: ${SANDBOX_CONFIG}
 snapshotConfig:
   # MEMORY keeps the Pi process warm across suspend, which is the point of the
   # always-on path: a resume replays no cold boot.

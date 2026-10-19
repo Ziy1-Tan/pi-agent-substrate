@@ -1,0 +1,29 @@
+# Micro-VM WorkerPool for a local deployment.
+#
+# The worker image is the ateom-microvm build that matches the installed
+# substrate. Render with ATESPACE and WORKER_IMAGE set; the pool only
+# schedules on a node that advertises ate.dev/kvm.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: pi-workerpool
+  namespace: ${ATESPACE}
+  labels:
+    workload: pi
+spec:
+  replicas: 1
+  sandboxClasses:
+  - name: microvm
+    configRef:
+      name: microvm
+  template:
+    resources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  workerImage: ${WORKER_IMAGE}

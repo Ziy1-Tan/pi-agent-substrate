@@ -77,9 +77,10 @@ A single model call needs five values. They live in
 Pi defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
 `PI_MODEL_CONTEXT_WINDOW` or `PI_MODEL_MAX_TOKENS` only when the model differs.
 
-The endpoint and API are ordinary configuration and go into the actor
-template. The key does not: the actor sends a placeholder `Authorization`
-header, and the EgressPolicy replaces it with the value from the Secret.
+The endpoint and API go into the actor template. The key does not: the actor
+sends a placeholder header, which the EgressPolicy replaces with the value
+from the Secret. The header follows the wire API: `Authorization: Bearer` for
+OpenAI-compatible endpoints, `x-api-key` for Anthropic-compatible ones.
 
 ### Talk to it
 

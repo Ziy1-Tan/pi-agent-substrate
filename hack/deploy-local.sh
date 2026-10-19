@@ -8,8 +8,8 @@
 # and keeps the bot token out of Kubernetes.
 #
 # Assumes:
-#   - kind cluster with Agent Substrate installed (hack/e2e-kind.sh has done a
-#     deploy at least once, so the WorkerPool and images exist)
+#   - kind cluster with Agent Substrate installed, and a WorkerPool in ATESPACE
+#     whose sandboxClasses match SANDBOX_CLASS
 #   - local registry on localhost:5001
 #   - kubectl-ate on PATH (or KUBECTL_ATE set)
 #
@@ -26,7 +26,8 @@
 #   PI_PROVIDER       provider id (required)
 #   PI_MODEL          model id (required)
 #   PI_PROVIDER_BASE_URL  provider endpoint (required)
-#   PI_PROVIDER_API   wire protocol, e.g. openai-completions (required)
+#   PI_PROVIDER_API   wire protocol: openai-completions, openai-responses, or
+#                     anthropic-messages (required)
 #   PI_PROVIDER_API_KEY   API key, written to a Secret (required)
 #   PI_MODEL_CONTEXT_WINDOW / PI_MODEL_MAX_TOKENS
 #                     optional model metadata (Pi defaults: 128000 / 16384)
@@ -35,11 +36,13 @@
 #   PROVIDER_HOST     host named in the egress policy (default: parsed from the
 #                     provider's baseUrl)
 #   SECRET_NAME       Kubernetes Secret holding the API key (default: pi-provider)
+#   SANDBOX_CLASS     SANDBOX_CLASS_MICROVM (default) or SANDBOX_CLASS_GVISOR
+#   SANDBOX_CONFIG    SandboxConfig name (default: microvm)
 #   IDLE_SECONDS      idle window before suspend (default: 60)
 #   TELEGRAM_CHATS    comma-separated chat ids to answer (empty: any chat)
 #
 # The API key never enters the actor. The template carries a placeholder, and
-# the egress gateway replaces the Authorization header on the way out.
+# the egress gateway replaces the auth header on the way out.
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -58,6 +61,8 @@ ACTOR="${ACTOR:-pi-${CONVERSATION_SLUG:-conversation}}"
 PROVIDER_ENV="${PROVIDER_ENV:-deploy/local/provider.env}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/local/egress-policy.yaml.tmpl}"
 SECRET_NAME="${SECRET_NAME:-pi-provider}"
+SANDBOX_CLASS="${SANDBOX_CLASS:-SANDBOX_CLASS_MICROVM}"
+SANDBOX_CONFIG="${SANDBOX_CONFIG:-microvm}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
 TELEGRAM_CHATS="${TELEGRAM_CHATS:-}"
 REGISTRY="${REGISTRY:-localhost:5001}"
@@ -91,14 +96,36 @@ require "${PI_PROVIDER_BASE_URL:-}" PI_PROVIDER_BASE_URL
 require "${PI_PROVIDER_API:-}" PI_PROVIDER_API
 require "${PI_PROVIDER_API_KEY:-}" PI_PROVIDER_API_KEY
 
+if [[ "${SANDBOX_CLASS}" == "SANDBOX_CLASS_MICROVM" ]]; then
+  kvm_total="$("${kube[@]}" get nodes -o jsonpath='{range .items[*]}{.status.allocatable.ate\.dev/kvm}{"\n"}{end}' | awk '{total += $1} END {print total + 0}')"
+  if [[ "${kvm_total}" == "0" ]]; then
+    echo "no node advertises ate.dev/kvm; ${SANDBOX_CLASS} needs nested virtualization" >&2
+    exit 1
+  fi
+fi
+
+# Pi sends the key in the header its wire API uses. Anthropic uses x-api-key;
+# the OpenAI-compatible APIs use an Authorization bearer token.
+case "${PI_PROVIDER_API}" in
+  anthropic-messages) AUTH_HEADER=x-api-key; AUTH_PREFIX="" ;;
+  openai-completions|openai-responses) AUTH_HEADER=Authorization; AUTH_PREFIX="Bearer " ;;
+  *) echo "unsupported PI_PROVIDER_API: ${PI_PROVIDER_API}" >&2; exit 1 ;;
+esac
+
 echo "==> building and pushing the actor image"
 npm run build
 docker build -t "${REGISTRY}/pi-actor:local" -f images/actor/Dockerfile .
 docker push "${REGISTRY}/pi-actor:local"
 # A template must pin by digest. `docker inspect` reports the digest of the
 # multi-arch index, and a node that pulls that index can end up with a partial
-# image whose container never starts; resolve the linux/arm64 child manifest
-# instead. The platform matches the node because kind runs on this machine.
+# image whose container never starts; resolve the child manifest for this
+# machine's architecture instead. kind runs on this machine, so that is the
+# node's architecture too.
+case "$(uname -m)" in
+  x86_64|amd64) ACTOR_ARCH=amd64 ;;
+  aarch64|arm64) ACTOR_ARCH=arm64 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
 ACTOR_INDEX="$(curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
   "http://${REGISTRY}/v2/pi-actor/manifests/local")" || ACTOR_INDEX=""
 if [[ -z "${ACTOR_INDEX}" ]]; then
@@ -108,14 +135,15 @@ fi
 ACTOR_DIGEST="$(printf '%s' "${ACTOR_INDEX}" | node -e '
   let body = "";
   process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
+    const [arch] = process.argv.slice(1);
     const index = JSON.parse(body);
     const match = (index.manifests ?? []).find(
-      (entry) => entry.platform?.architecture === "arm64" && entry.platform?.os === "linux",
+      (entry) => entry.platform?.architecture === arch && entry.platform?.os === "linux",
     );
     if (match) process.stdout.write(match.digest);
-  });')"
+  });' "${ACTOR_ARCH}")"
 if [[ -z "${ACTOR_DIGEST}" ]]; then
-  echo "no linux/arm64 manifest in ${REGISTRY}/pi-actor:local" >&2
+  echo "no linux/${ACTOR_ARCH} manifest in ${REGISTRY}/pi-actor:local" >&2
   exit 1
 fi
 ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
@@ -133,6 +161,8 @@ RENDERED_POLICY=bin/egress-policy.yaml
 echo "==> rendering the egress policy for ${PROVIDER_HOST}"
 sed -e "s#\${PROVIDER_HOST}#${PROVIDER_HOST}#" \
     -e "s#\${PROVIDER_PORT}#${PROVIDER_PORT}#" \
+    -e "s#\${AUTH_HEADER}#${AUTH_HEADER}#" \
+    -e "s#\${AUTH_PREFIX}#${AUTH_PREFIX}#" \
     -e "s#\${CREDENTIAL_URI}#${CREDENTIAL_URI}#" \
     "${EGRESS_POLICY}" > "${RENDERED_POLICY}"
 
@@ -176,6 +206,8 @@ sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
     -e "s#\${API}#${PI_PROVIDER_API}#" \
     -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
     -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
+    -e "s#\${SANDBOX_CLASS}#${SANDBOX_CLASS}#" \
+    -e "s#\${SANDBOX_CONFIG}#${SANDBOX_CONFIG}#" \
     deploy/test/actor-template.json.tmpl > bin/actor-template.json
 # A template is immutable, so a rerun cannot replace it. Creating one is
 # therefore best-effort: an existing template is reused as-is, and the warning
@@ -200,6 +232,10 @@ for _ in $(seq 1 120); do
   fi
   sleep 5
 done
+if ! printf '%s' "${tag}" | grep -qE '[0-9a-f]{8}-'; then
+  echo "template did not produce a golden snapshot; inspect ${ATESPACE}/${ACTOR_TEMPLATE}" >&2
+  exit 1
+fi
 
 echo "==> creating actor ${ATESPACE}/${ACTOR}"
 actor_error="$("${ate[@]}" create actor "${ACTOR}" -a "${ATESPACE}" --template "${ACTOR_TEMPLATE}" 2>&1)" || {

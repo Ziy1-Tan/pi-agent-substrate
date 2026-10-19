@@ -40,13 +40,23 @@ deploy/atenet-egress -c ext-proc`.
 
 ## Credential injection
 
-Pi sends `Authorization: Bearer <apiKey>` by default, so `models.json` carries
-a placeholder and the policy swaps the header:
+Pi sends the key in the header its wire API uses. OpenAI-compatible APIs send
+`Authorization: Bearer <apiKey>`; Anthropic-compatible APIs send
+`x-api-key: <apiKey>`. `models.json` carries a placeholder and the policy
+replaces that header:
 
 ```yaml
+# openai-completions / openai-responses
 effects: {replaceHeaders: [{header: Authorization, prefix: "Bearer ",
   credentialUri: "ate-secret://k8s.io/default/<ns>/<secret>/api-key"}]}
+
+# anthropic-messages
+effects: {replaceHeaders: [{header: x-api-key,
+  credentialUri: "ate-secret://k8s.io/default/<ns>/<secret>/api-key"}]}
 ```
+
+Replacing the wrong header leaves the placeholder in place, and the provider
+rejects the request.
 
 The provider is default-deny: the policy ConfigMap ships as `policies: []`, so
 every injection returns 403 until the atespace is listed. It reads that

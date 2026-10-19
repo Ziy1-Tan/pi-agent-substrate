@@ -113,6 +113,8 @@ if [[ "${ONLY}" != "e2e" ]]; then
       -e "s#\${API}#${PI_PROVIDER_API}#" \
       -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
       -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
+      -e "s#\${SANDBOX_CLASS}#SANDBOX_CLASS_GVISOR#" \
+      -e "s#\${SANDBOX_CONFIG}#gvisor-default#" \
       deploy/test/actor-template.json.tmpl > bin/actor-template.json
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.json
 

@@ -10,6 +10,14 @@ export interface WebSocketTransportOptions {
 	/** Reconnect automatically when the socket closes. Defaults to true. */
 	autoReconnect?: boolean;
 	reconnectDelayMs?: number;
+	/** How long a connect may stay pending before it fails. */
+	connectTimeoutMs?: number;
+	/**
+	 * A connection with no traffic for this long is replaced before its next
+	 * write. A suspend tears the actor down without a FIN reaching us, so the
+	 * local socket can look open while every write is silently lost.
+	 */
+	staleAfterMs?: number;
 	log?: (message: string) => void;
 }
 
@@ -22,10 +30,12 @@ export class WebSocketTransport implements ActorTransport {
 	private readonly options: WebSocketTransportOptions;
 	private readonly recordListeners: Array<(record: Record<string, unknown>) => void> = [];
 	private readonly closeListeners: Array<(error?: Error) => void> = [];
-	private readonly connectListeners: Array<() => void> = [];
+	private readonly connectListeners: Array<(isReconnect: boolean) => void> = [];
 	private socket: WebSocket | undefined;
 	private connecting: Promise<void> | undefined;
 	private closed = false;
+	private everConnected = false;
+	private lastActivity = 0;
 	private retryTimer: NodeJS.Timeout | undefined;
 
 	constructor(options: WebSocketTransportOptions) {
@@ -44,28 +54,49 @@ export class WebSocketTransport implements ActorTransport {
 		this.closeListeners.push(listener);
 	}
 
-	onConnect(listener: () => void): void {
+	/** `isReconnect` is true for every connect after the first. */
+	onConnect(listener: (isReconnect: boolean) => void): void {
 		this.connectListeners.push(listener);
 	}
 
 	connect(): Promise<void> {
-		if (this.connected) return Promise.resolve();
+		const staleAfterMs = this.options.staleAfterMs ?? 5_000;
+		const looksAlive = this.connected && Date.now() - this.lastActivity < staleAfterMs;
+		if (looksAlive) return Promise.resolve();
 		if (this.connecting) return this.connecting;
 		this.closed = false;
-		const pending = openSocket(this.options).then(
+		// A socket can stay OPEN after the peer or the port-forward behind it
+		// went away; the write then succeeds locally and is never delivered.
+		// Replacing it on every connect attempt is what makes a resume work.
+		const stale = this.socket;
+		this.socket = undefined;
+		stale?.terminate();
+		const pending = withTimeout(
+			openSocket(this.options),
+			this.options.connectTimeoutMs ?? 10_000,
+		).then(
 			(socket) => {
 				this.socket = socket;
+				this.lastActivity = Date.now();
 				this.connecting = undefined;
-				socket.on("message", (data: Buffer) => this.deliver(String(data)));
+				socket.on("message", (data: Buffer) => {
+					this.lastActivity = Date.now();
+					this.deliver(String(data));
+				});
 				socket.on("close", () => {
-					if (this.socket === socket) this.socket = undefined;
+					// A socket replaced for being stale closes after its successor is
+					// installed; it must not clear or reconnect the newer one.
+					if (this.socket !== socket) return;
+					this.socket = undefined;
 					for (const listener of this.closeListeners) listener();
 					this.scheduleReconnect();
 				});
 				socket.on("error", (error: Error) => {
 					this.options.log?.(`transport error: ${error.message}`);
 				});
-				for (const listener of this.connectListeners) listener();
+				const isReconnect = this.everConnected;
+				this.everConnected = true;
+				for (const listener of this.connectListeners) listener(isReconnect);
 			},
 			(error: unknown) => {
 				this.connecting = undefined;
@@ -122,6 +153,23 @@ export class WebSocketTransport implements ActorTransport {
 		}, this.options.reconnectDelayMs ?? 250);
 		this.retryTimer.unref?.();
 	}
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`connect timed out after ${timeoutMs}ms`)), timeoutMs);
+		timer.unref?.();
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error: unknown) => {
+				clearTimeout(timer);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			},
+		);
+	});
 }
 
 function openSocket(options: WebSocketTransportOptions): Promise<WebSocket> {

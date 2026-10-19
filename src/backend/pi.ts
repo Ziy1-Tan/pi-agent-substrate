@@ -13,8 +13,8 @@ export interface ActorTransport {
 	onRecord(listener: (record: Record<string, unknown>) => void): void;
 	/** Receives connection loss. Called at most once per connection. */
 	onClose(listener: (error?: Error) => void): void;
-	/** Receives every successful (re)connect, before any record arrives. */
-	onConnect(listener: () => void): void;
+	/** Receives every successful connect; the flag marks a reconnect. */
+	onConnect(listener: (isReconnect: boolean) => void): void;
 	close(): Promise<void>;
 	/** True while records can be sent. */
 	readonly connected: boolean;
@@ -24,6 +24,8 @@ export type { AgentEventListener, AgentRequest, AgentResponse };
 
 interface ActiveTurn {
 	requestId: string;
+	/** Connection generation the prompt was written on. */
+	generation: number;
 	text: string;
 	deltaSinks: Set<AgentEventListener>;
 	resolve: (response: AgentResponse) => void;
@@ -42,6 +44,7 @@ export interface PiBackendOptions {
 	resultTtlMs?: number;
 	/** Called before a turn is written to a transport that is not connected. */
 	onReconnect?: () => Promise<void>;
+
 }
 
 /**
@@ -61,8 +64,11 @@ export class PiBackend implements AgentBackend {
 	private readonly turnTimeoutMs: number;
 	private readonly resultTtlMs: number;
 	private readonly onReconnect: (() => Promise<void>) | undefined;
+
 	/** Ids whose prompt reached the transport, so a reconnect never resends. */
 	private readonly sent = new Set<string>();
+	/** Bumped on every connect, so recovery can tell a stale write from a fresh one. */
+	private generation = 0;
 
 	private readonly settled = new Map<string, { response: AgentResponse; at: number }>();
 	private active: ActiveTurn | undefined;
@@ -73,13 +79,17 @@ export class PiBackend implements AgentBackend {
 		this.turnTimeoutMs = options.turnTimeoutMs ?? 10 * 60_000;
 		this.resultTtlMs = options.resultTtlMs ?? 24 * 60 * 60_000;
 		this.onReconnect = options.onReconnect;
+
 	}
 
 	async connect(): Promise<void> {
 		if (!this.wired) {
 			this.wired = true;
 			this.transport.onRecord((record) => this.handleRecord(record));
-			this.transport.onConnect(() => this.recoverInFlight());
+			this.transport.onConnect((isReconnect) => {
+				this.generation += 1;
+				if (isReconnect) this.recoverInFlight();
+			});
 		}
 		await this.transport.connect();
 	}
@@ -116,6 +126,7 @@ export class PiBackend implements AgentBackend {
 
 		const turn: ActiveTurn = {
 			requestId: request.requestId,
+			generation: this.generation,
 			text: "",
 			deltaSinks: new Set([onDelta]),
 			resolve: () => undefined,
@@ -143,6 +154,10 @@ export class PiBackend implements AgentBackend {
 			requestId: request.requestId,
 			type: "prompt",
 			message: request.prompt,
+		}).then(() => {
+			// Record which connection carried the prompt; a later reconnect that
+			// changes generation is what makes recovery necessary.
+			if (this.active === turn) turn.generation = this.generation;
 		});
 		return result;
 	}
@@ -155,7 +170,10 @@ export class PiBackend implements AgentBackend {
 	private async dispatch(command: Record<string, unknown>): Promise<void> {
 		try {
 			if (!this.transport.connected && this.onReconnect) await this.onReconnect();
-			if (!this.transport.connected) await this.transport.connect();
+			// Always ask the transport to connect: a socket that still reports
+			// OPEN may have outlived the actor behind it, and only the transport
+			// can tell a live connection from one whose writes go nowhere.
+			await this.transport.connect();
 			this.transport.send(command);
 		} catch (error) {
 			const turn = this.active;
@@ -185,9 +203,17 @@ export class PiBackend implements AgentBackend {
 			for (const sink of turn.deltaSinks) sink(event.delta);
 			return;
 		}
-		if (record.type === "bridge_result" || record.type === "bridge_result_reply") {
+		if (record.type === "bridge_result") {
 			const requestId = typeof record.requestId === "string" ? record.requestId : this.active?.requestId;
 			if (requestId) this.settle(requestId, typeof record.text === "string" ? record.text : "");
+			return;
+		}
+		if (record.type === "bridge_result_reply") {
+			// A recovery lookup, not a turn: only a found result settles it.
+			const result = record.result as { requestId?: string; text?: string } | undefined;
+			if (record.found === true && typeof result?.text === "string") {
+				this.settle(result.requestId ?? this.active?.requestId ?? "", result.text);
+			}
 			return;
 		}
 		if (record.type === "agent_settled") {
@@ -206,10 +232,12 @@ export class PiBackend implements AgentBackend {
 	/**
 	 * After a reconnect the bridge may have settled the active turn while the
 	 * socket was down. Ask it for that result instead of resending the prompt.
+	 * A turn whose prompt has not been written yet is left alone: the send is
+	 * still in flight and will use this connection.
 	 */
 	private recoverInFlight(): void {
 		const turn = this.active;
-		if (!turn || !this.sent.has(turn.requestId)) return;
+		if (!turn || turn.generation >= this.generation) return;
 		try {
 			this.transport.send({ id: `recover-${turn.requestId}`, type: "bridge_result", requestId: turn.requestId });
 		} catch {

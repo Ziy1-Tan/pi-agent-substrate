@@ -363,7 +363,7 @@ e2e 分三层，职责不同。
 
 - [x] M1：测试频道 echo 可用；网关重启后能从 `channel.jsonl` 恢复未完成投递。
 - [x] M2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
-- [ ] M3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
+- [x] M3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
 - [ ] M4：真实频道 smoke、失败与容量用例、100 次 soak、性能报告。
 
 ### 参考先例
@@ -408,7 +408,7 @@ e2e 分三层，职责不同。
 |---|---|---|---|
 | M1 | 抽离 pi-chat 频道与对话运行时为 standalone 网关，echo 后端验证消息与流式编辑 | 3–5 天 | [x] 已完成 |
 | M2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [x] 已完成 |
-| M3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [ ] 未开始 |
+| M3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [x] 已完成 |
 | M4 | 多频道、附件、重连重放、延迟与密度测量 | 3–5 天 | [ ] 未开始 |
 
 ### 待确认
@@ -441,3 +441,21 @@ e2e 分三层，职责不同。
 - [x] 验证：
   - `npm test` 16 个用例（M1 6 + L1 分帧 4 + bridge 4 + 本地端到端 2）。
   - `hack/e2e-kind.sh` 在 kind 上 7/7：流式回复、bash 工具写 `/workspace/e2e.txt`、手动 suspend、下一条消息经 router 自动 resume、文件与 session 均续接。
+
+### M3（已完成，2026-10-19）
+
+- [x] 生命周期状态机 `src/lifecycle/idle.ts`：`IDLE → ACTIVE → GRACE → SUSPENDING → SUSPENDED`。只有 `turnSettled()` 进入 `GRACE`，`turnStarted()` 一定离开它；挂起只在回合边界发起，因为 substrate 的 suspend 会取消进行中的工作而不是排空。
+- [x] 竞态处理：
+  - 挂起请求在途时到达的新 prompt 不再发第二次 suspend，且晚到的 suspend 结果不会把状态写回 `SUSPENDED`（否则那一回合结束后不会再挂起）。
+  - 挂起失败回落到 `GRACE` 并重设空闲窗口，不会永久卡在 `SUSPENDING`。
+- [x] 可注入时钟 `LifecycleClock`，测试用手动时钟驱动；每次决策都通过 `onEvent` 带上 reason（`turn_started`、`turn_settled`、`idle_elapsed`、`prompt_during_suspend`、`suspend_failed`）。
+- [x] 控制面客户端 `src/lifecycle/kubectl.ts`：`ensure` / `suspend` / `state`，解析 `ACTOR_STATE_*`；`AlreadyExists` 视为成功。
+- [x] 网关接入：`GatewayOptions.lifecycle` 只暴露 `ready` / `turnStarted` / `turnSettled`；`turnSettled()` 放在 `recordJobCompleted` 之后，避免 outbound 与 completed 之间的崩溃提前启动空闲计时。
+- [x] 连接修复（实际挂起暴露出两个缺陷）：
+  - 挂起会拆掉 actor 但不一定给客户端发 FIN，本地 socket 仍报告 `OPEN`。现在 `WebSocketTransport` 用 `staleAfterMs`（默认 5 秒无流量）判断连接是否可疑，并在 `connect()` 时替换；`PiBackend.dispatch` 每次都向 transport 请求连接，而不是只看 `connected`。
+  - 被替换的旧 socket 关闭时不能清掉新 socket，也不能触发重连。
+- [x] 本地网关入口 `src/bin/gateway.ts`：环境变量配置，stdin 收消息，stdout 用 `<<<reply` / `reply>>>` 框住多行回复；`hack/e2e-idle.mjs` 用它跑真实 router 路径。
+- [x] 验证：
+  - `npm test` 23 个用例（M1 6 + 分帧 4 + bridge 4 + 本地端到端 2 + 生命周期 5 + 网关生命周期 2）。
+  - `hack/e2e-kind.sh` 追加 `hack/e2e-idle.mjs`，5/5：流式回复、写 `/workspace/idle.txt`、无手动命令自动 `ACTOR_STATE_SUSPENDED`、下一条消息 router 自动 resume、文件仍可读。
+  - 本机测量：空闲窗口 15 秒，实际 `idleMs` 15001–15002 毫秒；挂起后首个回合（含 resume）1253 毫秒。

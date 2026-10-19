@@ -118,6 +118,13 @@ export class Gateway {
 			return;
 		}
 
+		if (this.options.lifecycle) {
+			// A retry against a suspended actor has to wake it before the prompt
+			// is written to the bridge.
+			await this.options.lifecycle.ready();
+			this.options.lifecycle.turnStarted();
+		}
+
 		// A retry after a crash keeps the original request id.
 		const requestId = state.dispatched.at(-1)?.requestId ?? job.jobId;
 		await this.options.hooks?.beforeSubmit?.();
@@ -155,6 +162,9 @@ export class Gateway {
 		const outbound = await runtime.recordOutbound(response.text, remoteMessageId);
 		await this.options.hooks?.afterOutbound?.();
 		await runtime.recordJobCompleted(outbound?.recordId);
+		// Only after the turn is fully recorded: a crash between outbound and
+		// completion must not start the idle timer on a half-finished turn.
+		this.options.lifecycle?.turnSettled();
 	}
 
 	private waitForWork(): Promise<void> {

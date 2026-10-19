@@ -15,6 +15,7 @@
 #   ACTOR_TEMPLATE    template name (default: pi-actor)
 #   ATESPACE          atespace (default: pi-agents)
 #   ROUTER_URL        router base URL as seen from this machine (default: http://127.0.0.1:8000)
+#   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
 #   ONLY              "deploy" to skip the e2e, "e2e" to skip the deploy
 set -o errexit -o nounset -o pipefail
 
@@ -28,6 +29,7 @@ ATESPACE="${ATESPACE:-pi-agents}"
 ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-actor}"
 ACTOR="${ACTOR:-pi-actor-1}"
 ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:8000}"
+IDLE_SECONDS="${IDLE_SECONDS:-15}"
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -113,4 +115,10 @@ if [[ "${ONLY}" != "deploy" ]]; then
   PI_ATESPACE="${ATESPACE}" PI_ACTOR="${ACTOR}" PI_ROUTER_URL="${ROUTER_URL}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     node hack/e2e-kind.mjs
+
+  echo "==> running the automatic suspend/resume e2e"
+  PI_ATESPACE="${ATESPACE}" PI_ACTOR="${ACTOR}" PI_ROUTER_URL="${ROUTER_URL}" \
+    KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
+    PI_IDLE_SECONDS="${IDLE_SECONDS}" \
+    node hack/e2e-idle.mjs
 fi

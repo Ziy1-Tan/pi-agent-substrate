@@ -1,4 +1,5 @@
 import type { InboundMessageInput, ResolvedConversation } from "../../third_party/pi-chat/types.js";
+import type { IdleLifecycle } from "../lifecycle/idle.js";
 
 export type Checkpoint = { cursor?: string; messageId?: string };
 
@@ -48,6 +49,11 @@ export interface GatewayOptions {
 	conversation: ResolvedConversation;
 	channel: Channel;
 	backend: AgentBackend;
+	/**
+	 * Optional idle-suspend controller. The gateway only reports turn
+	 * boundaries to it; the controller decides when the actor may sleep.
+	 */
+	lifecycle?: Pick<IdleLifecycle, "turnStarted" | "turnSettled" | "ready">;
 	hooks?: GatewayHooks;
 	ownerId?: string;
 }

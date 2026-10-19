@@ -1,5 +1,5 @@
 ---
-title: Pi 版 always-on-agent 架构设计
+title: Always-on Pi agents on Agent Substrate
 date: 2026-10-18
 tags:
   - substrate
@@ -10,282 +10,427 @@ tags:
   - spec
 ---
 
-> **一句话**
-> 复用 pi-chat 的频道与对话状态、always-on-agent 的空闲挂起策略、substrate 的可挂起 actor，在 actor 内跑 `pi --mode rpc`，得到「连接常开、计算按需」的 Pi 版 always-on-agent。
+> **In one sentence**
+> Reuse pi-chat's channels and conversation state, always-on-agent's idle
+> suspension policy, and Substrate's suspendable actors to run
+> `pi --mode rpc` inside an actor, giving a Pi agent that stays connected but
+> only computes on demand.
 
-## 问题
+## Problem
 
-个人 agent 的使用节奏是突发式的：聊几轮后离开，几小时甚至几天后回来继续。agent 绝大部分时间空闲，但用户希望它「一直在线」。现有的三条路径各有缺口：
+Personal agents are used in bursts. You talk for a few turns, leave, and come
+back hours or days later. The agent is idle almost the whole time, but you
+want it to stay online. None of the three existing paths covers that:
 
-1. 本地常驻进程。实现最简单，但持续占用本机资源，没有沙箱隔离；合上笔记本或退出终端，会话就断了，也无法把多个 agent 复用到少量计算资源上。
-2. 直接用 substrate 的任务驱动形态。actor 可以挂起，状态可跨恢复保留，但只有同步 HTTP `/submit`，没有流式输出、没有 TUI 体验，也没有连接保持与空闲判定。挂起需要外部显式调用。
-3. pi-chat。有 Discord/Telegram 频道、对话日志、流式渲染、附件和 secrets 交换，但每个频道拉起本地 Gondolin micro-VM 与 tmux worker，没有挂起概念，也不能交给 substrate 调度。
+1. **A resident local process.** Simplest to implement, but it holds local
+   resources forever, has no sandbox isolation, and dies when you close the
+   laptop or quit the terminal. It also cannot multiplex several agents onto a
+   small pool of compute.
+2. **Substrate's task-driven shape.** Actors suspend and keep their state
+   across a restore, but the entry point is a synchronous HTTP `/submit`. There
+   is no streaming, no TUI, no connection to hold, and no idle detection, so
+   every suspend has to be issued externally.
+3. **pi-chat.** It has Discord/Telegram adapters, a conversation log, streaming
+   rendering, attachments, and secret exchange, but it starts a local Gondolin
+   micro-VM and a tmux worker per channel. There is no notion of suspension, and
+   nothing can hand the work to Substrate.
 
-三个平台侧限制同时存在：
+Three platform constraints compound this:
 
-- substrate 没有 exec/attach，标准 Pi/Claude TUI 不能直接连到远端 actor；
-- 平台没有自动空闲挂起，suspend 都是显式触发；
-- 挂起会断开连接。内存快照能恢复进程，但对端 socket 不会复活，恢复后必须重连并重新对齐状态。
+- Substrate has no exec/attach, so a standard Pi or Claude TUI cannot reach a
+  remote actor.
+- The platform does not detect idleness; every suspend is explicit.
+- Suspension drops connections. A memory snapshot restores the process, but the
+  socket on the other side does not come back, so a restore must reconnect and
+  re-align state.
 
-结果是用户只能在两种损失之间选择：牺牲体验（只能通过 API 或自制 UI 使用），或者牺牲效率（把 agent 常驻在本机）。
+The user is left choosing between two losses: give up the experience and use
+only an API or a hand-rolled UI, or give up efficiency and keep the agent
+resident on their machine.
 
-## 设计
+## Design
 
-系统分四层，各自负责一件事：
+Four layers, each with one job:
 
-| 层 | 角色 | 来源 |
+| Layer | Role | Source |
 |---|---|---|
-| 频道层 | 人在哪里说话 | pi-chat 的对话运行时与流式渲染，本仓库自带 curl、浏览器、Telegram 适配 |
-| 网关层 | 连接保持与生命周期决策 | always-on-agent 的 `idle-suspender` 思想 |
-| 平台层 | 调度、路由、快照、沙箱 | substrate |
-| 运行时层 | agent 循环与工具执行 | `pi --mode rpc`，跑在 actor 内 |
+| Channel | Where the human speaks | pi-chat's conversation runtime and streaming renderer; this repository supplies the curl, browser, and Telegram adapters |
+| Gateway | Connection keep-alive and lifecycle decisions | always-on-agent's `idle-suspender` idea |
+| Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
+| Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
 
-核心原则是 presence 与 cognition 分离：
+The organizing principle is that presence and cognition are separate concerns:
 
-- 常驻网关作为普通进程运行，不进入 WorkerPool、不作为 actor；它持有频道连接、会话映射和聊天日志；
-- 每个会话对应一个 substrate actor，actor 内运行 `pi --mode rpc`，保存 `/workspace`、session 文件与进程状态；
-- 消息到达时网关把 turn 转发给 actor；actor 挂起时由 `atenet-router` 自动 resume；
-- 收到 `agent_settled` 后开始空闲计时；超时且没有在飞工作时调用 suspend；
-- 下一条消息重复上述过程，对话从 session 与快照续接。
+- The resident gateway is an ordinary process. It is not in a WorkerPool and
+  is not an actor. It holds the channel connections, the conversation mapping,
+  and the chat log.
+- Each conversation has its own Substrate actor. The actor runs
+  `pi --mode rpc` and holds `/workspace`, the session files, and the process
+  state.
+- When a message arrives, the gateway forwards the turn to the actor. When the
+  actor is suspended, `atenet-router` resumes it.
+- Idle timing starts after `agent_settled`. When the window expires with no work
+  in flight, the gateway suspends the actor.
+- The next message repeats the cycle. The conversation continues from the
+  session file and the snapshot.
 
-### 状态归属
+### State ownership
 
-| 状态 | 位置 | 理由 |
+| State | Where | Why |
 |---|---|---|
-| 频道配置、bot token、secrets | 网关本地 | presence 层，不能进入快照 |
-| `channel.jsonl`、队列、附件 | 网关本地 | 断线、重放与会话重建依赖它 |
-| memory、skills、代码、session 文件 | actor 的 `/workspace` | cognition 层，随快照迁移 |
-| 进程内存、运行中的 turn | actor | MEMORY 快照可恢复温热进程 |
-| placement、快照引用、身份 | substrate | 平台职责 |
+| Channel config, bot token, secrets | Gateway | Presence layer; must never enter a snapshot |
+| `channel.jsonl`, queue, attachments | Gateway | Recovery, replay, and conversation rebuild all depend on it |
+| memory, skills, code, session files | Actor's `/workspace` | Cognition layer; moves with the snapshot |
+| Process memory, the running turn | Actor | A MEMORY snapshot restores a warm process |
+| Placement, snapshot references, identity | Substrate | Platform responsibility |
 
-### 设计目标
+### Goals
 
-1. 频道发出消息后，挂起的 actor 自动恢复并流式回复。
-2. turn 结束后经过配置的空闲窗口，actor 挂起并释放 worker。
-3. 数小时后发下一条消息，同一会话继续，上下文与工作区不丢。
-4. 多个会话共享一个较小的 WorkerPool，空闲会话不占 worker。
-5. 真实模型凭证不进入沙箱，由 egress 策略注入。
-6. 在全新机器上按 README 用一条命令启动，填上 token 即可对话。
+1. A message from a channel resumes a suspended actor and streams a reply.
+2. After a turn and the configured idle window, the actor suspends and releases
+   its worker.
+3. A message hours later continues the same conversation with context and
+   workspace intact.
+4. Several conversations share a small WorkerPool; idle ones hold no worker.
+5. Real model credentials never enter the sandbox; the egress layer injects
+   them.
+6. On a fresh machine, one command from the README gets to a working
+   conversation once a token is supplied.
 
-## 组件
+## Components
 
-### 网关
+### Gateway
 
-standalone 进程，不运行 agent。
+A standalone process. It does not run the agent.
 
-- **频道适配**：把外部消息变成一条 turn，把回复按该频道的渲染方式送回去。
-- **对话运行时**：消息队列、会话锁、`channel.jsonl`、附件落盘。
-- **会话映射**：按 conversation id 确定 actor 名，create-if-absent。
-- **RPC 中继**：频道消息转换成 Pi RPC 命令，事件转换回流式渲染。
-- **空闲挂起**：`agent_settled` 后计时，prompt 到达时取消。
-- **控制面客户端**：create / resume / suspend。
+- **Channel adapters** turn an external message into one turn and deliver the
+  reply the way that channel renders.
+- **Conversation runtime**: message queue, session lock, `channel.jsonl`,
+  attachment storage.
+- **Conversation mapping**: derive the actor name from the conversation id and
+  create the actor if it is absent.
+- **RPC relay**: turn channel messages into Pi RPC commands, and Pi's events
+  back into streaming output.
+- **Idle suspension**: start a timer after `agent_settled`, cancel it when a
+  prompt arrives.
+- **Control-plane client**: create, resume, suspend.
 
-### actor 镜像
+### Actor image
 
-- **WS ↔ stdio bridge**：接收 WebSocket 的 JSONL 行写入 `pi --mode rpc` 的 stdin，stdout 按行推回。
-- **启动入口**：`pi --mode rpc --session-dir /workspace/.pi`，会话 id 由网关传入。
-- **基础镜像**为 Node，版本以 Pi 的 `engines` 要求为准并固定。
-- **`/workspace`** 声明为 durableDir；memory、skills、代码与 session 文件都在这里。
+- **WebSocket-to-stdio bridge**: each JSONL record arriving on the socket is
+  written to `pi --mode rpc`'s stdin; stdout is framed back into records and
+  pushed to the socket.
+- **Entry point**: `pi --mode rpc --session-dir /workspace/.pi`, with the
+  session id supplied by the gateway.
+- **Base image** is Node, pinned to a version that satisfies Pi's `engines`
+  requirement.
+- **`/workspace`** is declared as a durableDir. Memory, skills, code, and
+  session files all live there.
 
-### 不修改的部分
+### What is not modified
 
-- pi-chat 的频道、渲染、配置、secrets 模块。
-- substrate 核心与 router。
+- pi-chat's channel, rendering, config, and secrets modules.
+- The Substrate core and router.
 
-## 核心模型
+## Core models
 
-### 接口契约
+### Interface contracts
 
-#### 网关 → actor
+#### Gateway to actor
 
-- 传输：WebSocket，JSONL 记录，一行一个 JSON 对象。
-- 路由：请求头 `ate-target-actor: <atespace>/<actor>`；URL 与 Host 不参与 actor 选择。
-- 命令：`prompt`、`get_state`、`abort`、`clear_queue`、`new_session`。
-- 事件：`message_update`、`tool_call`、`agent_settled` 以及 Pi 的其它会话事件。
-- 相关性：命令携带 `id`，响应回显同一个 `id`；客户端按 id 关联，不依赖响应顺序。
-- 背压：网关必须持续读取；WebSocket 慢不能阻塞 actor 的 stdout。
+- **Transport**: WebSocket carrying JSONL records, one JSON object per line.
+- **Routing**: the `ate-target-actor: <atespace>/<actor>` header. URL and Host
+  play no part in actor selection.
+- **Commands**: `prompt`, `get_state`, `abort`, `clear_queue`, `new_session`.
+- **Events**: `message_update`, `tool_call`, `agent_settled`, and Pi's other
+  session events.
+- **Correlation**: commands carry an `id` and responses echo it. Clients
+  correlate by id and never depend on response ordering.
+- **Backpressure**: the gateway must keep reading; a slow WebSocket must not
+  block the actor's stdout.
 
-bridge 在此之上加两条扩展：
+The bridge adds two extensions on top of Pi's protocol:
 
-- `bridge_result`：回合结算时由 bridge 主动发出，带 `requestId`。Pi 自己的 `agent_settled` 不带 request id，这条记录才是网关结算的依据。它比 `agent_settled` 先发，因为网关收到第一条就结算，而一条裸的 `agent_settled` 会把失败当成空回复。
-- `bridge_get_state` / `bridge_result` 查询：客户端重连后向 bridge 索取已完成回合的结果，而不是重发 prompt。
+- **`bridge_result`** is emitted by the bridge when a turn settles, carrying the
+  `requestId`. Pi's own `agent_settled` does not identify the turn, so this is
+  what the gateway settles on. It is sent before `agent_settled` because the
+  gateway settles on the first record it sees, and a bare `agent_settled` would
+  turn a provider failure into an empty reply.
+- **`bridge_get_state` / `bridge_result` lookup** lets a reconnected client ask
+  the bridge for a turn that settled while it was away, instead of resending the
+  prompt.
 
-#### 网关 → 控制面
+#### Gateway to control plane
 
-- 生产：ateapi，使用 podcert mTLS 或 ServiceAccount 身份。
-- 本地：`kubectl-ate` 子进程。
-- 操作：CreateActor、ResumeActor、SuspendActor、GetActor。
+- **Production**: the ateapi, over podcert mTLS or ServiceAccount identity.
+- **Local**: the `kubectl-ate` subprocess.
+- **Operations**: CreateActor, ResumeActor, SuspendActor, GetActor.
 
-#### 客户端 → 网关
+#### Client to gateway
 
-- 频道客户端走各自的适配器。
-- 浏览器与 curl 走网关的 HTTP/WebSocket API；该 API 只转发 prompt 与事件，不直接触碰 actor。
+- Channel clients go through their own adapters.
+- The browser and curl use the gateway's HTTP/WebSocket API, which relays
+  prompts and events and never touches an actor directly.
 
-### 投递状态机
+### Delivery state machine
 
-每个 turn 是一个 job，运行时把记录追加到 `channel.jsonl`：
+Every turn is a job. The runtime appends these records to `channel.jsonl`:
 
 ```
 inbound -> job_queued -> job_dispatched -> outbound -> job_completed
 ```
 
-`job_dispatched` 存一个对该 job 稳定的 request id。后端按 request id 幂等，频道按 delivery id 幂等。网关启动时扫描没有终态记录的 job，按日志位置恢复：
+`job_dispatched` stores a request id that stays stable for the job. The backend
+is idempotent per request id and the channel is idempotent per delivery id. On
+start, the gateway scans for jobs without a terminal record and recovers them by
+their position in the log:
 
-| 崩溃点 | 日志中的状态 | 恢复方式 |
+| Crash point | Recorded state | Recovery |
 |---|---|---|
-| 提交前 | `job_queued` | 用 job id 作为 request id 重新提交 |
-| 提交后、响应前 | `job_dispatched` | 用同一 request id 重试，后端返回同一个 turn |
-| 频道已发送、`outbound` 未写 | `job_dispatched` | 重试缓存的 turn；频道按 delivery id 抑制重复投递 |
-| `outbound` 已写、`job_completed` 未写 | `outbound` | 只补 completion，不再调用后端或频道 |
+| Before submit | `job_queued` | Submit again with the job id as the request id |
+| After submit, before the response | `job_dispatched` | Retry the same request id; the backend returns the same turn |
+| After the channel send, before `outbound` | `job_dispatched` | Retry the cached turn; the channel suppresses the duplicate delivery id |
+| After `outbound`, before `job_completed` | `outbound` | Append the completion only; call neither the backend nor the channel |
 
-恢复路径从不重放已完成的 turn。
+The recovery path never replays a completed turn.
 
-### 生命周期状态机
+### Lifecycle state machine
 
 ```text
-IDLE ──prompt──> ACTIVE
-ACTIVE ──agent_settled──> GRACE
-GRACE ──prompt──> ACTIVE
-GRACE ──超时且无在飞命令──> SUSPENDING
-SUSPENDING ──完成──> SUSPENDED
-SUSPENDED ──prompt/attach──> RESUMING ──ready──> ACTIVE
-ACTIVE/GRACE ──actor crash──> CRASHED（需要 revert 或重建）
+IDLE --prompt--> ACTIVE --agent_settled--> GRACE
+GRACE --prompt--> ACTIVE
+GRACE --timeout with nothing in flight--> SUSPENDING
+SUSPENDING --done--> SUSPENDED
+SUSPENDED --prompt/attach--> RESUMING --ready--> ACTIVE
+ACTIVE/GRACE --actor crash--> CRASHED (requires revert or recreate)
 ```
 
-关键约束：
+The constraints that matter:
 
-- 只有 `agent_settled` 之后才允许进入 `GRACE`；`prompt` 到达立即取消计时。
-- suspend 是「取消在飞请求」而不是 drain，因此绝不能在 turn 中间触发。网关在 `turnStarted()` 时离开 `GRACE`，在回合完全记录之后才 `turnSettled()`。
-- `turnStarted()` 之后发生的任何失败都必须结算一次，否则在飞计数不会归零，状态永远回不到 `GRACE`，actor 再也不会挂起。
-- `SUSPENDING` 期间到达的 prompt 交给 router 的 resume 处理；网关不并发发起 suspend，晚到的 suspend 结果也不能把状态写回 `SUSPENDED`。
-- 挂起失败回落到 `GRACE` 并重设空闲窗口，不把会话卡在 `SUSPENDING`。
-- actor 崩溃不自动重试同一 turn；保留会话文件，由用户或策略决定 revert。
+- Only `agent_settled` permits entry to `GRACE`, and an arriving prompt cancels
+  the timer immediately.
+- Suspension cancels in-flight work rather than draining it, so it must never
+  fire mid-turn. The gateway leaves `GRACE` on `turnStarted()` and calls
+  `turnSettled()` only after the turn is fully recorded.
+- Any failure after `turnStarted()` must still settle once. Otherwise the
+  in-flight count never returns to zero, the state machine never reaches
+  `GRACE`, and the actor never suspends again.
+- A prompt arriving during `SUSPENDING` is left to the router's resume. The
+  gateway does not issue a second suspend, and a late suspend result must not
+  write the state back to `SUSPENDED`.
+- A failed suspend falls back to `GRACE` and restarts the idle window rather
+  than leaving the conversation stuck in `SUSPENDING`.
+- An actor crash does not automatically retry the same turn. The session files
+  stay; whether to revert is the user's or the policy's decision.
 
-**连接与唤醒**：连接 bridge 这个动作本身就会唤醒 actor。因此 transport 不能自动重连——挂起后自动重连会立刻把 actor 叫醒，形成挂起—唤醒循环，actor 永远睡不满一个空闲窗口。下一次 turn 的 `connect()` 是唯一的唤醒动作。断线时后端必须清空已结算缓存：那些结果在旧 actor 的 bridge 进程里，恢复后的 actor 看不到它们。
+**Connecting wakes the actor.** The act of connecting to the bridge is itself a
+wake signal. A transport therefore must not reconnect on its own: doing so after
+a suspend would wake the actor immediately and produce a suspend/wake loop in
+which the actor never sleeps through a full idle window. The next turn's
+`connect()` is the only wake action. On disconnect the backend must also clear
+its settled-result cache, because those results lived in the bridge process the
+suspend removed.
 
-### 会话映射
+### Conversation mapping
 
-- 一个 conversation 对应一个 actor，actor 名由 conversation id 确定性生成（规范化成 Kubernetes 合法名，固定 `pi-` 前缀）。
-- actor 不存在时按 golden template create-if-absent；模板不可变，变更需要新建模板。
-- 同一 atespace 内 actor 名唯一；跨频道不共享 actor，除非显式配置。
-- 每个会话独立 actor、独立日志、独立锁；一个会话失败不影响其余。
+- One conversation maps to one actor. The actor name is derived
+  deterministically from the conversation id: normalized into a legal
+  Kubernetes name with a fixed `pi-` prefix.
+- If the actor is absent, create it from the golden template. Templates are
+  immutable; a change needs a new template.
+- Actor names are unique within an atespace. Channels do not share an actor
+  unless configured to.
+- Each conversation has its own actor, log, and lock, so one conversation
+  failing does not affect the others.
 
-### 快照策略
+### Snapshot policy
 
-- 默认 MEMORY：进程内存 + rootfs 变更 + durable data，恢复出温热进程，客户端重连后只需 `get_state`。
-- 可选 DATA + session 文件：快照更小、跨运行时更稳，但恢复是冷启动，需要 `--session-id` 或 `--continue` 续接。
-- 两种策略都必须保证 `/workspace` 中的 session 文件可读；网关不依赖快照中的内存。
-- 恢复后 Pi 子进程可能已死。bridge 惰性启动 Pi，并在客户端连接时按固定 `--session-id` 重启，session 文件续接，不重跑上一回合。
+- **MEMORY** (default): process memory plus rootfs changes plus durable data.
+  The restore produces a warm process, and a reconnecting client only needs
+  `get_state`.
+- **DATA plus session files** (optional): a smaller snapshot that survives
+  runtime changes, but the restore is cold and must continue via `--session-id`
+  or `--continue`.
+- Either policy must leave the session files under `/workspace` readable. The
+  gateway never depends on memory captured in a snapshot.
+- After a restore the Pi child process may be dead. The bridge starts Pi lazily
+  and, when a client connects, restarts it on the same `--session-id` so Pi
+  continues the session file instead of rerunning the previous turn.
 
-### 重连与幂等
+### Reconnect and idempotence
 
-- 网关为每个 turn 分配 request id；同一 id 重试返回已有结果，不重复执行。
-- 客户端断线期间，网关缓冲事件；重连后先 `get_state` 与读取会话历史，再继续推送。
-- 挂起导致的断线不自动重放最后一个 turn；已提交的 turn 以 session 文件为准。
-- RPC 客户端没有内建重连，重连逻辑由网关/中继负责。
+- The gateway assigns a request id per turn. A retry with the same id returns
+  the existing result rather than executing again.
+- While a client is disconnected the gateway buffers events. On reconnect the
+  client first fetches `get_state` and the conversation history, then resumes
+  the live stream.
+- A disconnect caused by suspension does not replay the last turn; the session
+  file is the source of truth for what was committed.
+- The RPC client has no built-in reconnect. Reconnection is the gateway's or
+  the relay's responsibility.
 
-### 错误传播
+### Error propagation
 
-失败必须和「空回复」区分开，否则用户只看到沉默，运维也无法判断是模型问题还是网关问题。
+A failure must be distinguishable from an empty reply. Otherwise the user sees
+silence and an operator cannot tell a model problem from a gateway problem.
 
-- Pi 用 `message_end` 的 `stopReason: "error"` + `errorMessage` 报告 provider 失败；重试耗尽时另有 `auto_retry_end.success: false` + `finalError`。
-- bridge 把这两类信号读成回合结果的一部分，随 `bridge_result` 发出。
-- 后端把它放进 `AgentResponse.error`，网关记 `job_failed`，并通过频道的 `sendError` 把原因送到用户面前。
-- 网关自身的异常（提交失败、transport 断开）走同一条上报路径，同时结算生命周期。
+- Pi reports a provider failure through the final assistant message:
+  `stopReason: "error"` with `errorMessage`. An exhausted retry loop emits
+  `auto_retry_end` with `success: false` and `finalError`.
+- The bridge folds both signals into the turn result and sends it with
+  `bridge_result`.
+- The backend puts it in `AgentResponse.error`, the gateway records
+  `job_failed`, and the channel's `sendError` delivers the reason to the user.
+- The gateway's own failures, such as a failed submit or a dropped transport,
+  take the same reporting path and settle the lifecycle on the way out.
 
-## 部署
+## Deployment
 
-### 形态与约束
+### Shape and constraints
 
-- 单副本运行，每个 bot token 只维持一个活跃频道连接；个人场景使用单副本加重启策略，暂不做 leader election。
-- 单用户部署时网关跑在用户机器上，通过 port-forward 连 router；集群内部署时用 Service DNS 直接访问 `atenet-router.ate-system.svc`。
-- bot token 只存在网关一侧；模型 key 不进 actor，由 egress 在出站时注入。
-- actor 不持有控制面凭据，不能自行 suspend；生命周期决策只能由网关发起。
-- 重启后从 `channel.jsonl` 与会话映射恢复未完成的投递，不重放已提交的 turn。
+- One replica. Each bot token maintains a single active channel connection.
+  Personal deployments use one replica with a restart policy and no leader
+  election.
+- A single-user deployment runs the gateway on the user's machine and reaches
+  the router through a port-forward. An in-cluster deployment uses Service DNS
+  to reach `atenet-router.ate-system.svc` directly.
+- The bot token exists only on the gateway side. The model key never enters the
+  actor; the egress layer injects it on the way out.
+- Actors hold no control-plane credentials and cannot suspend themselves.
+  Lifecycle decisions belong to the gateway.
+- After a restart the gateway recovers unfinished deliveries from
+  `channel.jsonl` and the conversation mapping without replaying committed
+  turns.
 
-### 可移植性
+### Portability
 
-部署路径只有一条，本地与集群共用同一套清单，只切换存储、镜像仓库与 sandbox class：
+There is one deployment path. Local and cluster deployments share the same
+manifests and differ only in storage, image registry, and sandbox class:
 
-- **清单结构一致。** Deployment、ActorTemplate、WorkerPool、ConfigMap/Secret 的字段相同，差异放在覆盖层。
-- **一键安装。** 脚本负责构建或拉取镜像、创建 atespace 与模板、等待 golden snapshot、部署网关，并打印频道接入步骤。
-- **配置收拢。** 频道 token、atespace、template、空闲秒数集中在一处；模型 key 走 credential provider 与 egress 策略。
-- **无主机路径依赖。** 网关只使用集群内 Service DNS。
+- **One manifest structure.** Deployment, ActorTemplate, WorkerPool, and
+  ConfigMap/Secret carry the same fields; the differences live in an overlay.
+- **One install script.** It builds or pulls images, creates the atespace and
+  template, waits for the golden snapshot, deploys the gateway, and prints the
+  channel setup steps.
+- **One place for configuration.** Channel tokens, atespace, template, and the
+  idle window are configured together. The model key goes through the
+  credential provider and the egress policy.
+- **No host-path dependency.** The gateway uses in-cluster Service DNS only.
 
-## 横切关注点
+## Cross-cutting concerns
 
-### 超时与容量
+### Timeouts and capacity
 
-- `atenet-router` 的 `--route-timeout` 默认 10 秒，对整轮对话偏短，需要按部署调大。
-- `--parked-request-budget` 默认 5 秒；冷节点或大快照需要更宽预算。
-- 长连接存在流空闲超时，需要保活或由重连恢复。
-- WorkerPool 的 worker 数决定并发会话上限：worker 用满时新 actor 会 park 或返回可诊断错误。
+- `atenet-router`'s `--route-timeout` defaults to 10 seconds, too short for a
+  full conversational turn. Raise it per deployment.
+- `--parked-request-budget` defaults to 5 seconds. Cold nodes or large
+  snapshots need more.
+- Long-lived connections have a stream idle timeout; keep them alive or let a
+  reconnect recover them.
+- The WorkerPool's worker count caps concurrent conversations. When workers run
+  out, a new actor parks or fails with a diagnosable error.
 
-### 安全
+### Security
 
-- bot token 与模型 key 只存在网关或 Kubernetes Secret；actor 内使用占位值。
-- 模型调用通过 egress 策略注入真实凭证，actor 与快照都不含明文。
-- actor 不持有控制面凭据。
-- 单用户或私有部署，不实现多租户 RBAC。
+- The bot token and model key live only in the gateway or a Kubernetes Secret.
+  The actor holds placeholders.
+- Model calls get real credentials from the egress policy. Neither the actor
+  nor a snapshot contains plaintext.
+- Actors hold no control-plane credentials.
+- Deployments are single-user or private; multi-tenant RBAC is out of scope.
 
-### 兼容性
+### Compatibility
 
-- 固定 Pi 版本，并在网关中声明支持的 RPC 命令/事件集合。
-- RPC 是版本相关的；升级 Pi 必须先跑 smoke，再滚动 actor 镜像。
-- ActorTemplate 不可变；镜像 digest 变化会重建 golden snapshot。
+- Pin the Pi version and declare the set of RPC commands and events the gateway
+  reads.
+- RPC is version-sensitive. Upgrading Pi means running the smoke suite first,
+  then rolling the actor image.
+- ActorTemplates are immutable. A digest change rebuilds the golden snapshot.
 
-## 测试设计
+## Testing
 
-好的测试只验证外部行为：给定一条频道消息和一组 RPC 事件，网关是否产生正确的转发、挂起与重连行为；不觊觎内部状态对象或私有方法。
+Good tests assert external behavior: given a channel message and a set of RPC
+events, does the gateway forward, suspend, and reconnect correctly? They do not
+reach into internal state objects or private methods.
 
-### Seam
+### Seams
 
-最高 seam 放在网关边界。三组外部依赖都必须可注入：
+The highest seam sits at the gateway boundary. All three external dependencies
+must be injectable:
 
-- 频道入口：假频道注入消息，绕过真实频道；
-- actor 传输：假 WebSocket 回放 RPC 记录；
-- 控制面客户端：假 create/resume/suspend，记录调用顺序与次数。
+- **Channel entry**: a fake channel injects messages, bypassing the real ones.
+- **Actor transport**: a fake WebSocket replays RPC records.
+- **Control-plane client**: a fake create/resume/suspend records call order and
+  counts.
 
-断言网关发出的命令序列、挂起调用、渲染输出与状态迁移，不碰内部状态对象或私有方法。这样覆盖频道、会话映射、RPC 中继、空闲策略和重连，不需要真实集群与真实 Pi。
+Assert the command sequence the gateway emits, the suspend calls, the rendered
+output, and the state transitions, without touching internals. That covers
+channels, conversation mapping, the RPC relay, idle policy, and reconnection
+without a cluster or a real Pi.
 
-actor 侧的 bridge 有独立 seam：用假 pi 的 stdio 回放 JSONL，验证 WebSocket 双向转发、背压与断连。事件不要手写，从固定版本的 Pi 录制真实记录作为 fixture，覆盖严格 LF 分帧、CRLF、`U+2028`/`U+2029`、id 关联、stdout 只放协议、stderr 不参与协议。
+The bridge has its own seam: replay JSONL through a fake `pi` stdio and verify
+two-way forwarding, backpressure, and disconnects. Do not hand-write events;
+record them from a pinned Pi as fixtures, covering strict LF framing, CRLF,
+`U+2028`/`U+2029`, id correlation, protocol-only stdout, and stderr kept out of
+the protocol stream.
 
-空闲计时器使用可注入时钟；控制面客户端的 suspend 完成时机可控制，用于构造 `SUSPENDING` 期间到达 prompt 的竞态。
+The idle timer takes an injectable clock, and the control client's suspend can
+be held open, which is what makes the prompt-during-`SUSPENDING` race testable.
 
-### 端到端
+### End to end
 
-分三层，职责不同。
+Three layers with different jobs.
 
-**核心链路（CI）**：集群里跑真实 actor 与真实 `pi --mode rpc`，LLM 用 OpenAI 兼容的 mock 返回固定内容与工具调用，保证可重复、零成本。断言流式回复、写 `/workspace` 文件、无手动命令自动挂起、下一条消息自动 resume、文件与 session 均续接。
+**Core path in CI.** A real actor and a real `pi --mode rpc` in a cluster, with
+an OpenAI-compatible mock returning fixed content and tool calls, so the run is
+repeatable and costs nothing. Assertions: the reply streams, the agent writes a
+file under `/workspace`, the actor suspends with no manual command, the next
+message resumes it, and both the file and the session continue.
 
-**真实频道 smoke（手动或夜间）**：专用测试 bot 与测试聊天，验证频道适配器与真实 provider。确认流式 edit-in-place、分块与限流、自动挂起与恢复、附件与控制命令。
+**Real channel smoke, manual or nightly.** A dedicated test bot and test chat
+validate the channel adapter and a real provider: streaming edit-in-place,
+chunking and rate limits, automatic suspend and resume, attachments, and the
+control commands.
 
-**失败与容量**：worker 用满时的排队与错误、resume 失败注入、actor 崩溃后 session 保留、网关重启矩阵、Pi 版本契约测试。
+**Failure and capacity.** Queuing and errors when workers run out, injected
+resume failures, session survival after an actor crash, the gateway restart
+matrix, and a contract test for the pinned Pi version.
 
-### 验收阈值
+### Acceptance thresholds
 
-| 指标 | 目标 | 说明 |
+| Metric | Target | Notes |
 |---|---|---|
-| 自动挂起触发 | 空闲窗口 + ≤5 秒 | 无手动命令 |
-| resume 到首 token | P50 ≤5 秒，P95 ≤10 秒 | 按机器校准 |
-| 重连 | 0 重复帧，0 缺口 | 三种断线时机分别验证 |
-| 100 次 suspend/resume | 无连接/内存增长趋势；session 条目与文件 hash 稳定 | soak |
-| 凭证泄漏 | actor env、快照、日志中零命中真实 token/key | 安全 |
-| 密度 | 2 会话 / 1 worker 空闲时全部挂起 | 资源 |
+| Automatic suspend | Idle window + ≤5s | No manual command |
+| Resume to first token | P50 ≤5s, P95 ≤10s | Calibrate per machine |
+| Reconnect | 0 duplicate frames, 0 gaps | Verified at three disconnect points |
+| 100 suspend/resume cycles | No growth trend in connections or memory; stable session entries and file hashes | Soak |
+| Credential leakage | Zero hits for real tokens or keys in actor env, snapshots, or logs | Security |
+| Density | With 2 conversations and 1 worker, both suspend when idle | Resources |
 
-## 不做的部分
+## Out of scope
 
-- 标准 Pi TUI 或 Claude Code TUI 的原生远端 attach。Pi TUI 不是 RPC 客户端，Claude 没有公开的 RPC/attach 模式。
-- OpenClaw 与 ACP 的复用。只借用 always-on-agent 的生命周期思想，不依赖 OpenClaw。
-- 多租户鉴权、RBAC、配额与计费。
-- 产品化前端与移动端 App。浏览器页面只用于观察多会话与重放；正式入口是 curl 与 Telegram。
-- 模型路由、A/B 测试、自动选择 provider。
-- 在线迁移或跨集群调度。
+- Native remote attach for the standard Pi or Claude Code TUI. Pi's TUI is not
+  an RPC client, and Claude has no public RPC or attach mode.
+- Reusing OpenClaw or ACP. Only always-on-agent's lifecycle ideas are borrowed;
+  there is no dependency on OpenClaw.
+- Multi-tenant authentication, RBAC, quotas, and billing.
+- A productized frontend or mobile app. The browser page exists to observe
+  conversations and replay; the real entry points are curl and Telegram.
+- Model routing, A/B tests, and automatic provider selection.
+- Online migration or cross-cluster scheduling.
 
-## 参考
+## References
 
-- `agent-substrate/always-on-agent`：`extensions/substrate/idle-suspender.ts`、`actor-router.ts`、`actor-provisioner.ts`、`manifests/actortemplate.yaml`（MEMORY 快照的取舍与「restoring a warm, already-thinking agent」）。
-- `earendil-works/pi-chat`：`src/live`、`src/services`、`src/runtime.ts`、`src/render`、`src/gondolin.ts`（需要替换的沙箱层）。
-- `earendil-works/pi`：`packages/coding-agent/docs/rpc.md`、`rpc-commands.md`、`cli.md`、`src/modes/rpc/rpc-client.ts`。
-- substrate：`docs/architecture.md`、`cmd/atenet/internal/router/xds.go`（WebSocket upgrade 与 idle timeout）、`docs/integration-repos.md`、`docs/egress-credential-injection.md`、`docs/egress-trust-bundle.md`。
-- substrate 的 kind e2e（`hack/run-e2e-kind.sh`、`internal/e2e`）与 always-on-agent 的 smoke 脚本，作为断言组织方式的参考。
+- `agent-substrate/always-on-agent`: `extensions/substrate/idle-suspender.ts`,
+  `actor-router.ts`, `actor-provisioner.ts`, `manifests/actortemplate.yaml`
+  (the MEMORY snapshot trade-off and "restoring a warm, already-thinking
+  agent").
+- `earendil-works/pi-chat`: `src/live`, `src/services`, `src/runtime.ts`,
+  `src/render`, `src/gondolin.ts` (the sandbox layer this project replaces).
+- `earendil-works/pi`: `packages/coding-agent/docs/rpc.md`,
+  `rpc-commands.md`, `cli.md`, `src/modes/rpc/rpc-client.ts`.
+- Substrate: `docs/architecture.md`, `cmd/atenet/internal/router/xds.go`
+  (WebSocket upgrade and idle timeout), `docs/integration-repos.md`,
+  `docs/egress-credential-injection.md`, `docs/egress-trust-bundle.md`.
+- Substrate's kind e2e (`hack/run-e2e-kind.sh`, `internal/e2e`) and
+  always-on-agent's smoke scripts, as models for how assertions are organized.

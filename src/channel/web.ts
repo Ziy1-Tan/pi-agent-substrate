@@ -57,6 +57,11 @@ export class WebChannel implements Channel {
 		return undefined;
 	}
 
+	async sendError(delivery: OutboundDelivery): Promise<string | undefined> {
+		this.recordError(delivery.text, delivery.deliveryId);
+		return undefined;
+	}
+
 	async syncPreview(text: string): Promise<void> {
 		// The gateway hands over the accumulated reply, which is also what a
 		// reconnecting client needs: replaying snapshots in order reconstructs

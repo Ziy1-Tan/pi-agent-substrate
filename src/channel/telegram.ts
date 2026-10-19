@@ -33,6 +33,15 @@ export class TelegramChannel implements Channel {
 	}
 
 	async send(delivery: OutboundDelivery): Promise<string | undefined> {
+		return this.deliver(delivery);
+	}
+
+	/** Delivers the failure as ordinary text, so the user learns why it is quiet. */
+	async sendError(delivery: OutboundDelivery): Promise<string | undefined> {
+		return this.deliver({ ...delivery, text: `The turn failed: ${delivery.text}` });
+	}
+
+	private async deliver(delivery: OutboundDelivery): Promise<string | undefined> {
 		const text = delivery.text.trim();
 		if (text.length === 0) return undefined;
 		const chunks = splitMessage(text, TELEGRAM_TEXT_LIMIT);
@@ -44,7 +53,7 @@ export class TelegramChannel implements Channel {
 			// land, so it falls back to a fresh message.
 			if (index === 0 && this.messageId !== undefined) {
 				const edited = await this.edit(chunk).catch(() => undefined);
-				lastMessageId = edited ?? await this.post(chunk);
+				lastMessageId = edited ?? (await this.post(chunk));
 			} else {
 				lastMessageId = await this.post(chunk);
 			}

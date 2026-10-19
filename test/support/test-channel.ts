@@ -18,6 +18,8 @@ export interface TestChannelOptions {
  */
 export class TestChannel implements Channel {
 	readonly sent: SentMessage[] = [];
+	/** Failures delivered through `sendError`, in order. */
+	readonly errors: string[] = [];
 	readonly previews: string[] = [];
 	sendAttempts = 0;
 	duplicateDeliveries = 0;
@@ -56,6 +58,11 @@ export class TestChannel implements Channel {
 
 	async syncPreview(text: string): Promise<void> {
 		this.previews.push(text);
+	}
+
+	async sendError(delivery: OutboundDelivery): Promise<string | undefined> {
+		this.errors.push(delivery.text);
+		return undefined;
 	}
 
 	async clearPreview(): Promise<void> {

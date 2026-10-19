@@ -12,6 +12,11 @@ export interface OutboundDelivery {
 
 export interface Channel {
 	send(delivery: OutboundDelivery): Promise<string | undefined>;
+	/**
+	 * Tells the user the turn failed. Without it a provider outage looks like
+	 * an agent that answered with nothing.
+	 */
+	sendError?(delivery: OutboundDelivery): Promise<string | undefined>;
 	syncPreview(text: string): Promise<void>;
 	clearPreview(): Promise<void>;
 }
@@ -24,6 +29,11 @@ export interface AgentRequest {
 
 export interface AgentResponse {
 	text: string;
+	/**
+	 * Set when the turn failed. The gateway records a failed job and delivers
+	 * the message to the user, instead of sending an empty reply.
+	 */
+	error?: string;
 }
 
 export type AgentEventListener = (delta: string) => void;

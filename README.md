@@ -79,6 +79,18 @@ multi-arch index: a node that pulls the index can end up with a partial image
 whose container never starts, and the only symptom is a crash and a wakeup
 probe timeout. The script resolves the child digest for you.
 
+The API key is not put in the template. The script writes it to a Kubernetes
+Secret (`pi-provider` in the atespace) and the template carries the placeholder
+`egress-injected`; the egress policy replaces the `Authorization` header on the
+way out, so the key never reaches the actor spec, its environment, or a
+snapshot. That needs the Kubernetes Secrets credential provider, which a
+standard install deploys, and the atespace-to-namespace grant the script adds
+to `k8s-credential-provider-namespace-policy` when it is missing.
+
+The gateway must be told the same template: `PI_ACTOR_TEMPLATE` defaults to
+`pi-actor`, and the local template is `pi-local`. The command the script prints
+already includes it.
+
 ## Layout
 
 ```
@@ -171,14 +183,16 @@ unlisted `account/channel` id opens on first use.
 
 Egress policies are per actor, so a newly created actor needs one before its
 first turn; `PI_EGRESS_POLICY` (default `deploy/test/egress-policy.yaml`) is
-applied on creation. Without it the turn completes with an empty reply rather
-than a visible error, because Pi retries the provider connection and settles.
+applied on creation. Without it the provider call is denied, and the turn now
+fails with the provider's error instead of an empty reply.
 
 The gateway depends on three injected pieces, so tests do not need a cluster or
 a real model:
 
-- `Channel`: sends messages, updates a streaming preview, clears it.
-- `AgentBackend`: submits a turn and streams deltas.
+- `Channel`: sends messages, updates a streaming preview, clears it, and
+  optionally delivers a turn failure through `sendError`.
+- `AgentBackend`: submits a turn and streams deltas. A response may carry an
+  `error`, which the gateway records as `job_failed`.
 - `ResolvedConversation`: storage layout and conversation identity.
 
 ## Delivery state and restart recovery

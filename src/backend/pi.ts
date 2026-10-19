@@ -231,22 +231,27 @@ export class PiBackend implements AgentBackend {
 		}
 		if (record.type === "bridge_result") {
 			const requestId = typeof record.requestId === "string" ? record.requestId : this.active?.requestId;
-			if (requestId) this.settle(requestId, typeof record.text === "string" ? record.text : "");
+			if (requestId) {
+				const text = typeof record.text === "string" ? record.text : "";
+				const error = typeof record.error === "string" ? record.error : undefined;
+				this.settle(requestId, text, error);
+			}
 			return;
 		}
 		if (record.type === "bridge_result_reply") {
 			// A recovery lookup, not a turn: only a found result settles it.
-			const result = record.result as { requestId?: string; text?: string } | undefined;
+			const result = record.result as { requestId?: string; text?: string; error?: string } | undefined;
 			if (record.found === true && typeof result?.text === "string") {
-				this.settle(result.requestId ?? this.active?.requestId ?? "", result.text);
+				this.settle(result.requestId ?? this.active?.requestId ?? "", result.text, result.error);
 			}
 			return;
 		}
 		if (record.type === "agent_settled") {
-			// The bridge pairs agent_settled with bridge_result; the fallback
-			// covers a bridge whose result record did not survive.
+			// The bridge pairs agent_settled with bridge_result, sent first. This
+			// fallback covers a bridge whose result record did not survive, and
+			// an empty reply is the only thing left to report.
 			const turn = this.active;
-			if (turn) this.settle(turn.requestId, turn.text);
+			if (turn) this.settle(turn.requestId, turn.text, turn.text.length === 0 ? "the turn ended without a reply" : undefined);
 			return;
 		}
 		if (record.type === "bridge_exit") {
@@ -271,13 +276,13 @@ export class PiBackend implements AgentBackend {
 		}
 	}
 
-	private settle(requestId: string, text: string): void {
+	private settle(requestId: string, text: string, error?: string): void {
 		const turn = this.active;
 		if (!turn || turn.requestId !== requestId) return;
 		if (turn.timer) clearTimeout(turn.timer);
 		this.active = undefined;
 		this.sent.delete(requestId);
-		const response: AgentResponse = { text };
+		const response: AgentResponse = error === undefined ? { text } : { text, error };
 		this.settled.set(requestId, { response, at: Date.now() });
 		turn.resolve(response);
 	}

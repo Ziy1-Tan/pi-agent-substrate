@@ -125,3 +125,46 @@ test("a turn in flight is never suspended", async (t) => {
 	await gateway.waitForIdle();
 	assert.equal(lifecycle.state, "GRACE");
 });
+
+test("a failed turn still ends, so the idle window can arm", async (t) => {
+	// A provider outage fails the turn after `turnStarted`. If the lifecycle
+	// never hears the matching settle, it stays ACTIVE and the actor is never
+	// suspended again: one transient error would pin a worker forever.
+	const root = await mkdtemp(join(tmpdir(), "pi-m3-"));
+	const conversation = await createConversation(root);
+	const channel = new TestChannel();
+	const clock = new ManualClock();
+	const control = new RecordingControl();
+	const lifecycle = new IdleLifecycle({
+		actor: { atespace: "pi-agents", name: "pi-conv-3" },
+		control,
+		idleMs: 1_000,
+		clock,
+	});
+	const backend = new EchoBackend();
+	const original = backend.submit.bind(backend);
+	backend.submit = async () => {
+		throw new Error("provider unreachable");
+	};
+	const gateway = new Gateway({ conversation, channel, backend, lifecycle });
+	await gateway.start();
+	t.after(async () => {
+		await gateway.stop();
+		await lifecycle.close();
+		await rm(root, { recursive: true, force: true });
+	});
+
+	await gateway.receive({ userId: "u", userName: "alice", text: "does not matter" });
+	await gateway.waitForIdle();
+	assert.equal(lifecycle.state, "GRACE", "a failed turn leaves the state machine able to suspend");
+	assert.equal(channel.errors.at(-1), "provider unreachable", "the failure reaches the user");
+
+	await clock.advance(1_000);
+	assert.equal(control.suspends, 1, "the actor still goes idle after a failed turn");
+
+	// And the conversation recovers: the next turn uses the real backend.
+	backend.submit = original;
+	await gateway.receive({ userId: "u", userName: "alice", text: "hello again" });
+	await gateway.waitForIdle();
+	assert.equal(channel.sent.at(-1)?.text, "Echo: hello again");
+});

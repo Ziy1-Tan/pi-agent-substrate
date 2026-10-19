@@ -89,3 +89,21 @@ test("a second prompt continues the same session", async (t) => {
 	assert.ok(users[0]?.includes("first"));
 	assert.ok(users[1]?.includes("second"));
 });
+
+test("a provider failure is reported as an error, not an empty reply", async (t) => {
+	// Pi turns a provider failure into an assistant message with
+	// `stopReason: "error"`. The bridge has to say so: otherwise the gateway
+	// records an empty reply and the user sees silence instead of the reason.
+	const harness = await createBridgeHarness("unused");
+	t.after(() => harness.close());
+	const client = await harness.open();
+	t.after(() => client.close());
+	harness.llm.failWith(503, "upstream is down");
+
+	await client.request({ id: "req-fail", type: "prompt", message: "say hi" });
+	const result = await client.waitFor(
+		(event) => event.type === "bridge_result" && event.requestId === "req-fail",
+	);
+	assert.equal(result.text, "");
+	assert.match(String(result.error), /upstream is down/);
+});

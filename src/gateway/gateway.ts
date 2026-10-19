@@ -4,6 +4,7 @@ import { ConversationRuntime } from "../../third_party/pi-chat/src/runtime.js";
 import type {
 	ChatLogRecord,
 	ConversationStatus,
+	JobDeliveryState,
 	PendingJob,
 } from "../../third_party/pi-chat/types.js";
 import type { Checkpoint, GatewayOptions, InboundMessageInput } from "./types.js";
@@ -129,6 +130,15 @@ export class Gateway {
 				}
 				const message = error instanceof Error ? error.message : String(error);
 				await this.runtime?.recordJobFailed(job, message);
+				// A crash between recording the outbound and marking the job done
+				// still delivered the reply; the recovery path finishes that job,
+				// so the user must not see a second, contradictory message.
+				const delivered = this.runtime?.getJobState(job.jobId).outbound !== undefined;
+				if (!delivered) {
+					await this.options.channel
+						.sendError?.({ deliveryId: `error-${job.jobId}`, text: message })
+						.catch(() => undefined);
+				}
 			} finally {
 				this.active = undefined;
 				this.maybeSettle();
@@ -162,6 +172,19 @@ export class Gateway {
 			await this.options.lifecycle.ready().catch(() => undefined);
 		}
 		this.options.lifecycle?.turnStarted();
+		// Every exit from here on settles the lifecycle, including a throw. A
+		// turn that failed after `turnStarted` would otherwise leave the actor
+		// ACTIVE for good, because the idle timer only arms from GRACE.
+		try {
+			await this.runStartedTurn(job, state, resumed);
+		} finally {
+			this.options.lifecycle?.turnSettled();
+		}
+	}
+
+	private async runStartedTurn(job: PendingJob, state: JobDeliveryState, resumed: boolean): Promise<void> {
+		const runtime = this.runtime;
+		if (!runtime) throw new Error("gateway is not running");
 
 		// A retry after a crash keeps the original request id.
 		const requestId = state.dispatched.at(-1)?.requestId ?? job.jobId;
@@ -193,6 +216,20 @@ export class Gateway {
 		await this.options.hooks?.afterResponse?.();
 
 		await this.options.channel.clearPreview();
+		if (response.error !== undefined) {
+			// The actor reached Pi, Pi reached the provider, and the provider
+			// said no. Recording an empty outbound would make the next turn look
+			// like a successful silent answer.
+			await runtime.recordJobFailed(job, response.error);
+			await this.options.channel.sendError?.({ deliveryId: requestId, text: response.error });
+			this.options.onTurn?.({
+				requestId,
+				turnMillis: Date.now() - startedAt,
+				firstTokenMillis,
+				resumed,
+			});
+			return;
+		}
 		const remoteMessageId = await this.options.channel.send({
 			deliveryId: requestId,
 			text: response.text,
@@ -209,9 +246,6 @@ export class Gateway {
 			firstTokenMillis,
 			resumed,
 		});
-		// Only after the turn is fully recorded: a crash between outbound and
-		// completion must not start the idle timer on a half-finished turn.
-		this.options.lifecycle?.turnSettled();
 	}
 
 	private waitForWork(): Promise<void> {

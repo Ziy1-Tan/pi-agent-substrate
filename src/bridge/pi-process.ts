@@ -1,7 +1,16 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { LineFramer, encodeRecord } from "../protocol/lines.js";
-import { assistantText, isAgentSettled, isRpcResponse, isTextDelta, type RpcState } from "../protocol/rpc.js";
+import {
+	assistantError,
+	assistantText,
+	isAgentSettled,
+	isAssistantMessageEnd,
+	isRpcResponse,
+	isTextDelta,
+	retryFailure,
+	type RpcState,
+} from "../protocol/rpc.js";
 
 export interface PiProcessOptions {
 	command: string;
@@ -106,11 +115,14 @@ export class PiActivity {
 	pendingMessageCount: number | undefined;
 	text = "";
 	private lastAssistantText: string | undefined;
+	/** Set when the turn ended in a provider error rather than a reply. */
+	private failure: string | undefined;
 
 	beginTurn(): void {
 		this.streaming = true;
 		this.text = "";
 		this.lastAssistantText = undefined;
+		this.failure = undefined;
 	}
 
 	/** Drops stream state after a child restart, keeping session metadata. */
@@ -121,8 +133,15 @@ export class PiActivity {
 
 	observe(event: unknown): void {
 		if (isTextDelta(event)) this.text += event.assistantMessageEvent.delta;
-		const completed = assistantText(event);
-		if (completed !== undefined) this.lastAssistantText = completed;
+		// Each finished assistant message supersedes the outcome before it: a
+		// retry that eventually returns text clears the failure that started it.
+		if (isAssistantMessageEnd(event)) {
+			const completed = assistantText(event);
+			if (completed !== undefined) this.lastAssistantText = completed;
+			this.failure = assistantError(event);
+		}
+		const exhausted = retryFailure(event);
+		if (exhausted !== undefined) this.failure = exhausted;
 		if (isAgentSettled(event)) this.streaming = false;
 		if (isRpcResponse(event) && event.command === "get_state" && event.success) {
 			const data = event.data as RpcState | undefined;
@@ -139,6 +158,12 @@ export class PiActivity {
 		if (!isAgentSettled(event)) return undefined;
 		if (this.lastAssistantText !== undefined) return this.lastAssistantText;
 		return this.text;
+	}
+
+	/** Why the turn failed, once `agent_settled` arrives; otherwise undefined. */
+	settledError(event: unknown): string | undefined {
+		if (!isAgentSettled(event)) return undefined;
+		return this.failure;
 	}
 
 	snapshot(): {

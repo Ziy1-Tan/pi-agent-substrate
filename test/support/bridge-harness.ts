@@ -15,9 +15,12 @@ import { startBridge, type Bridge } from "../../src/bridge/bridge.js";
 export async function startMockLlm(text: string): Promise<{
 	url: string;
 	requests: Array<Record<string, unknown>>;
+	/** Makes every following completion request fail with this HTTP error. */
+	failWith(status: number, message: string): void;
 	close(): Promise<void>;
 }> {
 	const requests: Array<Record<string, unknown>> = [];
+	let failure: { status: number; message: string } | undefined;
 	const server = createServer((req, res) => {
 		let body = "";
 		req.on("data", (chunk) => (body += chunk));
@@ -28,6 +31,11 @@ export async function startMockLlm(text: string): Promise<{
 				return;
 			}
 			requests.push(JSON.parse(body) as Record<string, unknown>);
+			if (failure) {
+				res.writeHead(failure.status, { "content-type": "application/json" });
+				res.end(JSON.stringify({ error: { message: failure.message, type: "server_error" } }));
+				return;
+			}
 			res.writeHead(200, {
 				"content-type": "text/event-stream",
 				"cache-control": "no-cache",
@@ -68,6 +76,9 @@ export async function startMockLlm(text: string): Promise<{
 	return {
 		url: `http://127.0.0.1:${address.port}/v1`,
 		requests,
+		failWith(status, message) {
+			failure = { status, message };
+		},
 		async close() {
 			await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
 		},
@@ -76,6 +87,13 @@ export async function startMockLlm(text: string): Promise<{
 
 export async function writePiConfig(agentDir: string, baseUrl: string): Promise<void> {
 	await mkdir(agentDir, { recursive: true });
+	// Retry is on by default with a 2s/4s/8s backoff. That is the right
+	// behaviour in production, but it makes a failure-injection test sit for
+	// 14 seconds; the bridge is what is under test here, not Pi's backoff.
+	await writeFile(
+		join(agentDir, "settings.json"),
+		JSON.stringify({ retry: { enabled: false } }),
+	);
 	await writeFile(
 		join(agentDir, "models.json"),
 		JSON.stringify({

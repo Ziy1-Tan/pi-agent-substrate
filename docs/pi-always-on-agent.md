@@ -327,13 +327,13 @@ e2e 分三层，职责不同。
 
 ### 需要覆盖的行为
 
-- [ ] 1. 空闲计时只在 `agent_settled` 后启动，`prompt` 到达取消计时。
-- [ ] 2. turn 进行中永不触发 suspend。
-- [ ] 3. 挂起中到达 prompt 时，resume 与 suspend 不发生竞态。
+- [x] 1. 空闲计时只在 `agent_settled` 后启动，`prompt` 到达取消计时。
+- [x] 2. turn 进行中永不触发 suspend。
+- [x] 3. 挂起中到达 prompt 时，resume 与 suspend 不发生竞态。
 - [x] 4. 客户端断线后重连，事件不重放已完成的 turn，状态通过 `get_state` 对齐。
 - [x] 5. 多会话映射到不同 actor，互不串扰。
 - [ ] 6. actor 崩溃时保留会话文件，不静默丢历史。
-- [ ] 7. egress 策略缺失时 LLM 调用被拒绝，且错误可诊断。
+- [x] 7. egress 策略缺失时模型调用被拒绝，且错误可诊断。
 - [ ] 8. FULL 与 DATA 两种快照下，恢复后的会话都能续接。
 - [x] 9. 同一 request id 重试不重复执行。
 - [x] 10. 网关重启后能从 `channel.jsonl` 恢复未完成的投递（会话映射已接入）。
@@ -342,7 +342,7 @@ e2e 分三层，职责不同。
 - [ ] 13. 失败注入：ateapi 不可用、resume 失败、快照上传失败、Pi/bridge/网关崩溃，行为符合预期且错误可诊断。
 - [x] 14. 网关重启的三个时间点：提交前、提交后未响应、响应后未确认，恢复结果分别符合预期。
 - [ ] 15. 协议一致性：固定 Pi 版本的契约测试通过，latest canary 能提前发现 RPC 漂移。
-- [ ] 16. 真实 token/key 不出现在 actor env、快照、日志中；actor 无法访问控制面。
+- [x] 16. 真实 token/key 不出现在 actor env、快照、日志中；actor 无法访问控制面。key 由 egress 在出站时注入，模板里只有占位值。
 - [x] 17. 每次挂起决策都有原因日志或指标；跳过挂起可解释。
 - [x] 18. 频道边界：Telegram edit 限流、消息分块、附件下载；浏览器频道已覆盖附件与重放。
 - [ ] 19. 100 次 suspend/resume 循环后无连接或内存增长趋势，session 条目与文件 hash 稳定。
@@ -465,9 +465,9 @@ e2e 分三层，职责不同。
 ### M4（已完成，2026-10-19）
 
 - [x] 浏览器频道 `src/channel/{web,server,events}.ts` + `src/channel/ui.html`：一个 HTTP 端口同时提供页面、`/events`（WebSocket）、`/status` 与 `/metrics`。页面显示流式回复、actor/生命周期状态、每个会话一个标签页，支持附件、`status`、`new session`、`stop`。
-- [x] 多会话映射 `src/gateway/manager.ts`：`conversationId -> {conversation, gateway, backend, lifecycle, actor}`。actor 名 = `PI_ACTOR_PREFIX` + 规范化后的 conversation id（默认 `pi-`，即 `web/alpha -> pi-web-alpha`），首次打开时 create-if-absent。
+- [x] 多会话映射 `src/gateway/manager.ts`：`conversationId -> {conversation, gateway, backend, lifecycle, actor}`。actor 名由会话 id 规范化得到，前缀固定为 `pi-`（`web/alpha -> pi-web-alpha`），首次打开时 create-if-absent。没有 `PI_ACTOR_PREFIX` 这个环境变量；`hack/e2e-web.mjs` 里的同名常量只用于独立推导预期名字。
   - 每个会话独立 actor、独立 `channel.jsonl`、独立锁；一个会话失败不影响其余。
-  - 新 actor 建好后立即应用 egress 策略。egress 是按 actor 生效的，漏掉这一步的表现是「回合完成但回复为空」：Pi 连不上模型后自行重试，最后由 `agent_settled` 以空文本收尾。
+  - 新 actor 建好后立即应用 egress 策略。egress 是按 actor 生效的，漏掉这一步的表现是模型调用被拒；现在会作为回合失败上报，而不是空回复。
 - [x] 附件：浏览器以 base64 上传，网关写入会话的 `incoming/` 目录前经过文件名净化（只取叶子名、去掉路径分隔符），再作为 `AttachmentInput` 交给 runtime。runtime 复制到 `filesDir` 并在 prompt 的 transcript 里列出 `/workspace/incoming/...`，与真实频道走同一条路径。
 - [x] 断线重放 `src/channel/events.ts`：每个事件分配一次递增 `seq`，环形缓冲保留最近 2000 条。客户端重连带 `since=<seq>`，服务端只补发该序号之后的事件；同一个 `seq` 不会重复下发，也不会跳过。
   - 预览帧携带「累积到目前的整段回复」而不是增量，重放时按序覆盖即可重建文本。
@@ -507,10 +507,18 @@ e2e 分三层，职责不同。
   - 空闲 12 秒后 `ACTOR_STATE_SUSPENDED`；期间持续观察仍保持挂起。
   - 下一条消息让 actor 回到 `ACTOR_STATE_RUNNING`，回复落在同一 chat；`/metrics` 记 `turns=2`、`suspends=1`、`resumed_turns=1`，`resume_millis` P50 801 毫秒。
 - [x] 本地自用的部署收拢：
-  - `hack/deploy-local.sh` 用本机 `~/.pi/agent/models.json` 里的单个 provider 建 `pi-local` 模板，并把 `deploy/local/egress-policy.yaml` 挂到 actor 上。
+  - `hack/deploy-local.sh` 用本机 `~/.pi/agent/models.json` 里的单个 provider 建 `pi-local` 模板，并从 `deploy/local/egress-policy.yaml.tmpl` 渲染策略挂到 actor 上。actor 名由 `CONVERSATION` 推导，与网关的映射一致（`local/chat -> pi-local-chat`），打印的启动命令带上 `PI_ACTOR_TEMPLATE`。
   - 模板必须按**平台子 manifest** 的 digest 固定：`docker inspect` 返回的是多架构 index digest，节点按它拉会得到残缺镜像，容器起不来、wakeup probe 超时，表现是 actor `CRASHED` 而不是一条明确的错误。
+  - API key 不写进模板：脚本把它放进 atespace 里的 Kubernetes Secret，模板里用占位值 `egress-injected`，由 egress 的 `replaceHeaders` 在出站时换成真 key。脚本同时补上 credential provider 的 atespace→namespace 授权并重启该 Deployment（策略只在启动时读一次）。
   - `src/bin/web.ts` 默认监听 `127.0.0.1`；页面没有鉴权，只有显式设置 `PI_WEB_HOST=0.0.0.0` 才允许同网段访问。
 - [x] 未覆盖：真实 bot token 的端到端 smoke 需要外部网络与一个测试 bot，留作手动步骤；Discord 未实现，设计文档仍把它列为后续项。
+
+### 失败回合与错误上报（已修复）
+
+两处独立缺陷，都会让一次失败看起来像一次「成功的空回复」：
+
+1. **失败的回合不结算生命周期**。`turnStarted()` 在提交前把 `inflight` 加一，只有走到底的回合才调用 `turnSettled()`。提交或响应抛错时只记一条 `job_failed`，`inflight` 停在 1；`turnSettled()` 从此被 `inflight > 0` 挡掉，状态永远到不了 `GRACE`。一次 provider 抖动就让该 actor 再也不会空闲挂起。现在失败路径也在 `finally` 里结算（注入式崩溃除外），并新增 `test/m3-gateway.test.ts` 的用例锁住「失败后仍能挂起」。
+2. **provider 错误被当成空文本**。Pi 用 `message_end` 的 `stopReason: "error"` + `errorMessage` 报告失败，重试耗尽时还有 `auto_retry_end.success: false` + `finalError`；网关此前只看 `agent_settled`，把空字符串当作正常回复写进 `channel.jsonl`。现在 bridge 读取这两个信号，先发 `bridge_result`（带 `error`）再转发 `agent_settled`，backend 把错误放进 `AgentResponse.error`，网关记 `job_failed` 并通过 `Channel.sendError` 把原因送到 curl、浏览器或 Telegram。`test/m2-bridge.test.ts` 用 503 的 mock provider 覆盖这条路径。
 
 ### 真实 provider 的接入要点（已修复）
 

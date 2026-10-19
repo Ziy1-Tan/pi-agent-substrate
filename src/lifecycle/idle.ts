@@ -28,11 +28,11 @@ export interface IdleLifecycleOptions {
  *
  * The one rule that matters most: a suspend is never issued while a turn is in
  * flight, because substrate's suspend cancels in-flight work rather than
- * draining it. `settled()` is the only entry to GRACE, and `begin()` always
- * leaves it.
+ * draining it. `turnSettled()` is the only entry to GRACE, and `turnStarted()`
+ * always leaves it.
  */
 export class IdleLifecycle {
-	readonly actor: ActorRef;
+	private readonly actor: ActorRef;
 	private readonly control: ActorControl;
 	private readonly idleMs: number;
 	private readonly clock: LifecycleClock;
@@ -57,10 +57,6 @@ export class IdleLifecycle {
 
 	get state(): IdleState {
 		return this.current;
-	}
-
-	get inFlight(): number {
-		return this.inflight;
 	}
 
 	/** A prompt was accepted for this conversation. Cancels any pending suspend. */
@@ -96,7 +92,7 @@ export class IdleLifecycle {
 		this.emit("actor_crashed", { error });
 	}
 
-	/** Ensures the actor exists. Cheap and safe to call before every turn. */
+	/** Creates the actor if absent. Safe to call before every turn. */
 	async ready(): Promise<void> {
 		await this.control.ensure(this.actor);
 		if (this.current === "SUSPENDED" || this.current === "IDLE") {

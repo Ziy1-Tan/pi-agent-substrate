@@ -1,1 +1,1 @@
-export { createTestConversation } from "../../src/gateway/conversation.js";
+export { createConversation as createTestConversation } from "../../src/gateway/conversations.js";

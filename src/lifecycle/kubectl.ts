@@ -14,8 +14,6 @@ export interface KubectlAteControlOptions {
 	template: string;
 	/** `--token-file` passed through for non-local clusters. */
 	tokenFile?: string;
-	/** Extra arguments inserted before the verb. */
-	args?: string[];
 	log?: (message: string) => void;
 }
 
@@ -29,7 +27,6 @@ export class KubectlAteControl implements ActorControl {
 	private readonly context: string | undefined;
 	private readonly template: string;
 	private readonly tokenFile: string | undefined;
-	private readonly extraArgs: string[];
 	private readonly log: (message: string) => void;
 
 	constructor(options: KubectlAteControlOptions) {
@@ -37,7 +34,6 @@ export class KubectlAteControl implements ActorControl {
 		this.context = options.context;
 		this.template = options.template;
 		this.tokenFile = options.tokenFile;
-		this.extraArgs = options.args ?? [];
 		this.log = options.log ?? (() => undefined);
 	}
 
@@ -86,7 +82,6 @@ export class KubectlAteControl implements ActorControl {
 			this.binary,
 			...(this.context ? ["--context", this.context] : []),
 			...(this.tokenFile ? ["--token-file", this.tokenFile] : []),
-			...this.extraArgs,
 			...args,
 		];
 		const { stdout } = await run(command[0] ?? this.binary, command.slice(1), { maxBuffer: 16 * 1024 * 1024 });
@@ -95,7 +90,7 @@ export class KubectlAteControl implements ActorControl {
 }
 
 /** `ACTOR_STATE_RUNNING` -> `running`, in the vocabulary the lifecycle uses. */
-export function parseActorState(stdout: string): ActorState {
+function parseActorState(stdout: string): ActorState {
 	const parsed = JSON.parse(stdout) as {
 		actors?: Array<{ status?: { state?: string } }>;
 		status?: { state?: string };

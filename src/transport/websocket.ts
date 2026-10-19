@@ -2,22 +2,17 @@ import WebSocket from "ws";
 
 import type { ActorTransport } from "../backend/pi.js";
 
+/** Longest a connect may stay pending; also the stale-connection window. */
+const CONNECT_TIMEOUT_MS = 10_000;
+/** No traffic for this long means the connection may outlive its actor. */
+const STALE_AFTER_MS = 5_000;
+/** Delay before a dropped connection is reopened. */
+const RECONNECT_DELAY_MS = 250;
+
 export interface WebSocketTransportOptions {
 	url: string;
 	/** Sent on the upgrade request; selects the actor when behind atenet. */
 	targetActor?: string;
-	headers?: Record<string, string>;
-	/** Reconnect automatically when the socket closes. Defaults to true. */
-	autoReconnect?: boolean;
-	reconnectDelayMs?: number;
-	/** How long a connect may stay pending before it fails. */
-	connectTimeoutMs?: number;
-	/**
-	 * A connection with no traffic for this long is replaced before its next
-	 * write. A suspend tears the actor down without a FIN reaching us, so the
-	 * local socket can look open while every write is silently lost.
-	 */
-	staleAfterMs?: number;
 	log?: (message: string) => void;
 }
 
@@ -29,7 +24,6 @@ export interface WebSocketTransportOptions {
 export class WebSocketTransport implements ActorTransport {
 	private readonly options: WebSocketTransportOptions;
 	private readonly recordListeners: Array<(record: Record<string, unknown>) => void> = [];
-	private readonly closeListeners: Array<(error?: Error) => void> = [];
 	private readonly connectListeners: Array<(isReconnect: boolean) => void> = [];
 	private socket: WebSocket | undefined;
 	private connecting: Promise<void> | undefined;
@@ -50,31 +44,23 @@ export class WebSocketTransport implements ActorTransport {
 		this.recordListeners.push(listener);
 	}
 
-	onClose(listener: (error?: Error) => void): void {
-		this.closeListeners.push(listener);
-	}
-
 	/** `isReconnect` is true for every connect after the first. */
 	onConnect(listener: (isReconnect: boolean) => void): void {
 		this.connectListeners.push(listener);
 	}
 
 	connect(): Promise<void> {
-		const staleAfterMs = this.options.staleAfterMs ?? 5_000;
-		const looksAlive = this.connected && Date.now() - this.lastActivity < staleAfterMs;
+		// A socket can stay OPEN after the actor behind it went away, and a write
+		// then succeeds locally without ever being delivered. Reconnect unless
+		// the current connection has carried traffic recently.
+		const looksAlive = this.connected && Date.now() - this.lastActivity < STALE_AFTER_MS;
 		if (looksAlive) return Promise.resolve();
 		if (this.connecting) return this.connecting;
 		this.closed = false;
-		// A socket can stay OPEN after the peer or the port-forward behind it
-		// went away; the write then succeeds locally and is never delivered.
-		// Replacing it on every connect attempt is what makes a resume work.
 		const stale = this.socket;
 		this.socket = undefined;
 		stale?.terminate();
-		const pending = withTimeout(
-			openSocket(this.options),
-			this.options.connectTimeoutMs ?? 10_000,
-		).then(
+		const pending = withTimeout(openSocket(this.options), CONNECT_TIMEOUT_MS).then(
 			(socket) => {
 				this.socket = socket;
 				this.lastActivity = Date.now();
@@ -88,7 +74,6 @@ export class WebSocketTransport implements ActorTransport {
 					// installed; it must not clear or reconnect the newer one.
 					if (this.socket !== socket) return;
 					this.socket = undefined;
-					for (const listener of this.closeListeners) listener();
 					this.scheduleReconnect();
 				});
 				socket.on("error", (error: Error) => {
@@ -142,7 +127,7 @@ export class WebSocketTransport implements ActorTransport {
 	}
 
 	private scheduleReconnect(): void {
-		if (this.closed || this.options.autoReconnect === false) return;
+		if (this.closed) return;
 		if (this.retryTimer) return;
 		this.retryTimer = setTimeout(() => {
 			this.retryTimer = undefined;
@@ -150,7 +135,7 @@ export class WebSocketTransport implements ActorTransport {
 				this.options.log?.(`reconnect failed: ${error instanceof Error ? error.message : String(error)}`);
 				this.scheduleReconnect();
 			});
-		}, this.options.reconnectDelayMs ?? 250);
+		}, RECONNECT_DELAY_MS);
 		this.retryTimer.unref?.();
 	}
 }
@@ -175,10 +160,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 function openSocket(options: WebSocketTransportOptions): Promise<WebSocket> {
 	return new Promise((resolve, reject) => {
 		const socket = new WebSocket(options.url, {
-			headers: {
-				...(options.targetActor ? { "ate-target-actor": options.targetActor } : {}),
-				...options.headers,
-			},
+			headers: options.targetActor ? { "ate-target-actor": options.targetActor } : {},
 		});
 		socket.once("open", () => resolve(socket));
 		socket.once("error", (error) => reject(error instanceof Error ? error : new Error(String(error))));

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { EchoBackend } from "../src/backend/echo.js";
-import { createTestConversation } from "../src/gateway/conversation.js";
+import { createConversation } from "../src/gateway/conversations.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { IdleLifecycle } from "../src/lifecycle/idle.js";
 import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/lifecycle/types.js";
@@ -57,7 +57,7 @@ class RecordingControl implements ActorControl {
 
 test("the gateway suspends after the idle window and wakes for the next turn", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-m3-"));
-	const conversation = await createTestConversation(root);
+	const conversation = await createConversation(root);
 	const channel = new TestChannel();
 	const clock = new ManualClock();
 	const control = new RecordingControl();
@@ -93,7 +93,7 @@ test("the gateway suspends after the idle window and wakes for the next turn", a
 
 test("a turn in flight is never suspended", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-m3-"));
-	const conversation = await createTestConversation(root);
+	const conversation = await createConversation(root);
 	const clock = new ManualClock();
 	const control = new RecordingControl();
 	const lifecycle = new IdleLifecycle({

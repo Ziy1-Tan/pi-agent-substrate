@@ -58,4 +58,4 @@ export interface GatewayOptions {
 	ownerId?: string;
 }
 
-export type { InboundMessageInput, ResolvedConversation };
+export type { InboundMessageInput };

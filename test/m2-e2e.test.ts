@@ -51,7 +51,6 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 
 	const transport = new WebSocketTransport({
 		url: `ws://127.0.0.1:${port}`,
-		autoReconnect: true,
 		log: process.env.PI_E2E_LOG ? (message) => console.error(`[transport] ${message}`) : () => undefined,
 	});
 	const backend = new PiBackend({ transport, turnTimeoutMs: 30_000 });

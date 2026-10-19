@@ -11,8 +11,6 @@ export interface ActorTransport {
 	send(record: Record<string, unknown>): void;
 	/** Receives every record from the actor. */
 	onRecord(listener: (record: Record<string, unknown>) => void): void;
-	/** Receives connection loss. Called at most once per connection. */
-	onClose(listener: (error?: Error) => void): void;
 	/** Receives every successful connect; the flag marks a reconnect. */
 	onConnect(listener: (isReconnect: boolean) => void): void;
 	close(): Promise<void>;
@@ -42,9 +40,6 @@ export interface PiBackendOptions {
 	turnTimeoutMs?: number;
 	/** How long a settled turn stays available for a retried request id. */
 	resultTtlMs?: number;
-	/** Called before a turn is written to a transport that is not connected. */
-	onReconnect?: () => Promise<void>;
-
 }
 
 /**
@@ -63,7 +58,6 @@ export class PiBackend implements AgentBackend {
 	private readonly transport: ActorTransport;
 	private readonly turnTimeoutMs: number;
 	private readonly resultTtlMs: number;
-	private readonly onReconnect: (() => Promise<void>) | undefined;
 
 	/** Ids whose prompt reached the transport, so a reconnect never resends. */
 	private readonly sent = new Set<string>();
@@ -78,8 +72,6 @@ export class PiBackend implements AgentBackend {
 		this.transport = options.transport;
 		this.turnTimeoutMs = options.turnTimeoutMs ?? 10 * 60_000;
 		this.resultTtlMs = options.resultTtlMs ?? 24 * 60 * 60_000;
-		this.onReconnect = options.onReconnect;
-
 	}
 
 	async connect(): Promise<void> {
@@ -169,10 +161,6 @@ export class PiBackend implements AgentBackend {
 
 	private async dispatch(command: Record<string, unknown>): Promise<void> {
 		try {
-			if (!this.transport.connected && this.onReconnect) await this.onReconnect();
-			// Always ask the transport to connect: a socket that still reports
-			// OPEN may have outlived the actor behind it, and only the transport
-			// can tell a live connection from one whose writes go nowhere.
 			await this.transport.connect();
 			this.transport.send(command);
 		} catch (error) {

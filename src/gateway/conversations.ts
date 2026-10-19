@@ -13,10 +13,10 @@ function sanitize(value: string): string {
 
 /**
  * Builds the storage layout pi-chat's runtime expects for a conversation.
- * The sandbox image and the local tools share it, so a gateway and a test
- * agree on where the log, workspace and lock live.
+ * Both the gateway entry point and the tests create conversations through
+ * this, so the log, workspace and lock paths cannot drift apart.
  */
-export async function createTestConversation(
+export async function createConversation(
 	rootDir: string,
 	conversationId = "test/echo",
 ): Promise<ResolvedConversation> {

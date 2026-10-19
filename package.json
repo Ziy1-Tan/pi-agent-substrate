@@ -8,14 +8,19 @@
 	"engines": {
 		"node": ">=22"
 	},
+	"piVersion": "0.84.2",
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "npm run build && NODE_ENV=test node --test dist/test/m1.test.js",
+		"test": "npm run build && NODE_ENV=test node --test dist/test/m1.test.js dist/test/m2-protocol.test.js dist/test/m2-bridge.test.js dist/test/m2-e2e.test.js",
 		"demo:echo": "npm run build && NODE_ENV=test node dist/test/demo/echo-demo.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",
+		"@types/ws": "^8.18.2",
 		"typescript": "^5.7.0"
+	},
+	"dependencies": {
+		"ws": "^8.22.0"
 	}
 }

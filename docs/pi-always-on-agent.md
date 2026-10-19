@@ -13,7 +13,7 @@ tags:
 > **一句话**
 > 复用 pi-chat 的频道与对话状态、always-on-agent 的空闲挂起策略、substrate 的可挂起 actor，在 actor 内跑 `pi --mode rpc`，得到「连接常开、计算按需」的 Pi 版 always-on-agent。
 
-> 本文同步自 Obsidian 笔记 `技术调研/Pi版always-on-agent-技术方案-2026-10-18.md`（2026-10-18），作为仓库内的设计基线。截至同一天，M1 已实现并提交，M2 及之后未开始；实现范围见文末「实现状态」。
+> 本文同步自 Obsidian 笔记 `技术调研/Pi版always-on-agent-技术方案-2026-10-18.md`（2026-10-18），作为仓库内的设计基线。实现进度见文末「实现状态」。
 
 ## Problem Statement
 
@@ -362,7 +362,7 @@ e2e 分三层，职责不同。
 ### 里程碑出口条件
 
 - [x] M1：测试频道 echo 可用；网关重启后能从 `channel.jsonl` 恢复未完成投递。
-- [ ] M2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
+- [x] M2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
 - [ ] M3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
 - [ ] M4：真实频道 smoke、失败与容量用例、100 次 soak、性能报告。
 
@@ -407,7 +407,7 @@ e2e 分三层，职责不同。
 | 阶段 | 内容 | 估计 | 状态 |
 |---|---|---|---|
 | M1 | 抽离 pi-chat 频道与对话运行时为 standalone 网关，echo 后端验证消息与流式编辑 | 3–5 天 | [x] 已完成 |
-| M2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [ ] 未开始 |
+| M2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [x] 已完成 |
 | M3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [ ] 未开始 |
 | M4 | 多频道、附件、重连重放、延迟与密度测量 | 3–5 天 | [ ] 未开始 |
 
@@ -428,10 +428,16 @@ e2e 分三层，职责不同。
 - [x] 重启恢复：覆盖提交前、提交后未响应、发送后未记录 outbound、响应已记录未确认四个时间点。
 - [x] 回归测试：`npm test` 运行 6 个用例，覆盖以上行为。
 
-### M2 及之后（未开始）
+### M2（已完成，2026-10-19）
 
-- [ ] actor 镜像与 Pi RPC bridge。
-- [ ] 真实模型 provider 与本地 Pi 配置接入。
-- [ ] 单频道端到端链路。
-- [ ] 手动 suspend → 下一条消息自动 resume。
-- [ ] 自动空闲挂起、真实频道、失败与容量用例。
+- [x] actor 内 RPC bridge：`src/bridge/`，一个端口同时提供 `/healthz`（ActorTemplate wakeupProbe）与 WebSocket；stdout 严格按 LF 分帧，`U+2028`/`U+2029` 不参与切分（`src/protocol/lines.ts`）。
+- [x] 回合关联：`prompt` 带 `requestId`，回合结算时桥额外发 `bridge_result`；`bridge_get_state` / `bridge_result` 支持断线后取回已完成回合。
+- [x] 网关侧 `PiBackend`（`src/backend/pi.ts`）：按 request id 幂等，断线不重发已提交的 prompt，重连后向桥索取结果；`WebSocketTransport` 支持 `ate-target-actor` 路由头与自动重连。
+- [x] actor 镜像：`images/actor/Dockerfile`，Node 22 + 固定版本 Pi（`package.json` 的 `piVersion`）+ bridge；入口与工作目录全部使用绝对路径，因为 actor 启动时不保留镜像 WORKDIR。
+- [x] 集群清单与脚本：`deploy/test/`、`hack/e2e-kind.sh`、`hack/e2e-kind.mjs`。gVisor WorkerPool、mock LLM、ActorTemplate（MEMORY 快照、`/workspace` durableDir）、只放行 mock LLM 的 EgressPolicy。
+- [x] 已知限制与对应处理：
+  - 快照恢复后 gVisor 里 Pi 子进程可能以 SIGILL 退出。bridge 惰性启动 Pi，并在客户端连接时按固定 `--session-id` 重启，session 文件续接，不重跑上一回合。
+  - actor 出网默认被拒；mock LLM 必须由 EgressPolicy 放行，真实部署改成 provider 域名并由 egress 注入凭证。
+- [x] 验证：
+  - `npm test` 16 个用例（M1 6 + L1 分帧 4 + bridge 4 + 本地端到端 2）。
+  - `hack/e2e-kind.sh` 在 kind 上 7/7：流式回复、bash 工具写 `/workspace/e2e.txt`、手动 suspend、下一条消息经 router 自动 resume、文件与 session 均续接。

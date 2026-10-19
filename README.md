@@ -4,27 +4,28 @@ Always-on Pi agents on [Agent Substrate](https://github.com/agent-substrate/subs
 a standalone gateway keeps the chat presence, while each conversation's
 cognition runs in a suspendable Substrate actor.
 
-This repository is at milestone **M1**. It does not need a cluster yet: the
-gateway, the conversation log, and the restart recovery path run and are tested
-on a workstation.
+This repository is at milestone **M2**. The gateway, the conversation log, and
+the restart recovery path run and are tested on a workstation; the actor bridge
+and the suspend/resume path additionally run on a kind cluster.
 
 ## Design
 
 The design baseline, including implementation status, is
 [docs/pi-always-on-agent.md](docs/pi-always-on-agent.md).
 
-## M1 scope
+## Scope
 
 M1 extracts the channel and conversation runtime from pi-chat into a standalone
-gateway and proves two things:
+gateway. M2 adds the actor side: a bridge that exposes `pi --mode rpc` as a
+WebSocket inside a Substrate actor, and a gateway backend that drives it.
 
 | Exit criterion | Where it is verified |
 |---|---|
-| A test channel can echo a message, with streaming edits | `test/m1.test.ts` test 1 |
-| After a gateway restart, unfinished deliveries resume from `channel.jsonl` | `test/m1.test.ts` tests 2 to 5 |
-
-The backend is a deterministic echo service. A real `pi --mode rpc` backend and
-the Discord/Telegram adapters are M2 and later.
+| A test channel echoes a message, with streaming edits | `test/m1.test.ts` |
+| After a gateway restart, unfinished deliveries resume from `channel.jsonl` | `test/m1.test.ts` |
+| The bridge forwards prompts to real `pi` and streams its reply | `test/m2-bridge.test.ts` |
+| A channel message reaches `pi` through the gateway and streams back | `test/m2-e2e.test.ts` |
+| Manually suspending the actor resumes on the next message, session and files intact | `hack/e2e-kind.sh` |
 
 ## Run
 
@@ -33,8 +34,12 @@ npm install
 npm test
 ```
 
-Requires Node.js 22 or newer. `npm test` typechecks, builds, and runs the
-acceptance tests.
+Requires Node.js 22 or newer, and a `pi` on `PATH` (or `PI_BIN` pointing at
+one). The bridge tests start real `pi --mode rpc` children against a local mock
+OpenAI-compatible server; no API key or cluster is needed.
+
+`npm test` typechecks, builds, and runs the acceptance tests. `PI_E2E_LOG=1`
+prints the actor and transport logs.
 
 To try the echo gateway by hand:
 
@@ -47,12 +52,35 @@ The demo prints the `channel.jsonl` path and echoes each line you type.
 ## Layout
 
 ```
-src/gateway/        Gateway state machine and injectable boundaries
-src/backend/echo.ts Deterministic, idempotent echo backend
-test/m1.test.ts     M1 acceptance tests
-test/support/       Test channel and test conversation layout (test builds only)
-third_party/pi-chat Vendored conversation runtime, see its README
+src/gateway/          Gateway state machine and injectable boundaries
+src/backend/echo.ts   Deterministic, idempotent echo backend
+src/backend/pi.ts     Backend over the actor bridge (idempotent per request id)
+src/bridge/           Actor-side bridge: WebSocket <-> `pi --mode rpc`
+src/protocol/         LF framing and the pinned RPC subset
+src/transport/        WebSocket actor transport with reconnect
+images/actor/         Actor image: Node + pinned Pi + bridge
+images/mock-llm/      OpenAI-compatible mock for the clustered e2e
+deploy/test/          WorkerPool, ActorTemplate, mock LLM, egress policy
+hack/e2e-kind.sh      Build, deploy, and run the clustered e2e
+test/                 Acceptance tests, M1 and M2
+test/support/         Test channel and test conversation layout (test builds only)
+third_party/pi-chat   Vendored conversation runtime, see its README
 ```
+
+## Clustered end-to-end
+
+Requires a kind cluster with Agent Substrate installed, a local registry on
+`localhost:5001`, and `kubectl-ate` on `PATH` (or `KUBECTL_ATE`).
+
+```sh
+ONLY=deploy ./hack/e2e-kind.sh   # build, push, template, actor
+./hack/e2e-kind.sh               # the same, then run the e2e
+```
+
+The e2e drives `test process -> atenet-router -> actor -> bridge -> pi -> mock
+LLM`, then suspends the actor through the control plane and prompts again. It
+asserts that the router resumes the actor, that a file written before the
+suspend is still readable, and that the session continues rather than restarting.
 
 The gateway depends on three injected pieces, so tests do not need a cluster or
 a real model:

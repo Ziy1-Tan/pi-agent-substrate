@@ -1,0 +1,54 @@
+# ActorTemplate for the clustered e2e, in ateapipb protojson form.
+#
+# The template is immutable. Changing the image, env, or resources means
+# creating a new template (and a new actor that uses it).
+#
+# ${...} placeholders are filled by hack/e2e-kind.sh:
+#   ACTOR_IMAGE   digest-pinned actor image in the local registry
+#   MODELS_JSON   the mock provider's models.json, inlined as an env value
+metadata:
+  atespace: pi-agents
+  name: pi-actor
+workerSelector:
+  matchLabels:
+    workload: pi
+containers:
+- name: bridge
+  image: ${ACTOR_IMAGE}
+  env:
+  - name: PI_PROVIDER
+    value: mock
+  - name: PI_MODEL
+    value: mock-model
+  - name: PI_MODELS_JSON
+    value: '${MODELS_JSON}'
+  # Actor egress only passes the urls an EgressPolicy allows; Pi's startup
+  # update and model-catalog checks would otherwise wait on a denied request.
+  - name: PI_OFFLINE
+    value: "1"
+  - name: PI_SKIP_VERSION_CHECK
+    value: "1"
+  wakeupProbe:
+    httpGet:
+      path: /healthz
+      port: 80
+  volumeMounts:
+  - name: workspace
+    mountPath: /workspace
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 1Gi
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+snapshotConfig:
+  # MEMORY keeps the Pi process warm across suspend, which is the point of the
+  # always-on path: a resume replays no cold boot.
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
+  storageLocation: gs://ate-snapshots/pi-agents/
+volumes:
+- name: workspace
+  durableDir: {}

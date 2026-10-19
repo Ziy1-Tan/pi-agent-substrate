@@ -1,0 +1,13 @@
+# Only the mock LLM is reachable from the e2e actor. A real deployment points
+# this at the model provider instead, and the credential stays in the egress
+# layer rather than the sandbox.
+metadata:
+  atespace: pi-agents
+  name: default
+rules:
+- http:
+    hostnames:
+    - mock-llm.pi-agents.svc.cluster.local
+    ports:
+      numbers:
+      - 8080

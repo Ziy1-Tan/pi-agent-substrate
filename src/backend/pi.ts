@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "../gateway/types.js";
 
 /**
@@ -53,6 +51,10 @@ export interface PiBackendOptions {
  * is answered from the cache, so a gateway restart after `agent_settled` never
  * runs the turn twice. The gateway runs one turn per conversation at a time, so
  * at most one request is in flight.
+ *
+ * A dropped connection does not fail the turn: the actor keeps working and the
+ * bridge holds the result. The transport reconnects, and `onConnect` asks the
+ * bridge for that result instead of resending the prompt.
  */
 export class PiBackend implements AgentBackend {
 	private readonly transport: ActorTransport;
@@ -77,7 +79,6 @@ export class PiBackend implements AgentBackend {
 		if (!this.wired) {
 			this.wired = true;
 			this.transport.onRecord((record) => this.handleRecord(record));
-			this.transport.onClose((error) => this.handleClose(error));
 			this.transport.onConnect(() => this.recoverInFlight());
 		}
 		await this.transport.connect();
@@ -144,11 +145,6 @@ export class PiBackend implements AgentBackend {
 			message: request.prompt,
 		});
 		return result;
-	}
-
-	/** The partial text of the running turn, if any. */
-	partial(): string | undefined {
-		return this.active?.text;
 	}
 
 	async close(): Promise<void> {
@@ -240,17 +236,4 @@ export class PiBackend implements AgentBackend {
 		turn.reject(error);
 	}
 
-	private handleClose(error?: Error): void {
-		// A dropped connection does not end the turn: the actor keeps running
-		// and the bridge still holds the result. Stay subscribed, let the
-		// transport reconnect, and recover the answer with bridge_result.
-		this.lastError = error;
-	}
-
-	/** The last connection error, for logs when a turn outlives its socket. */
-	lastError: Error | undefined;
-
-	static newRequestId(): string {
-		return randomUUID();
-	}
 }

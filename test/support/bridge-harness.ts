@@ -98,8 +98,6 @@ export async function writePiConfig(agentDir: string, baseUrl: string): Promise<
 
 export interface BridgeHarness {
 	bridge: Bridge;
-	agentDir: string;
-	workspace: string;
 	llm: Awaited<ReturnType<typeof startMockLlm>>;
 	open(): Promise<BridgeClient>;
 	close(): Promise<void>;
@@ -107,7 +105,7 @@ export interface BridgeHarness {
 
 export async function createBridgeHarness(
 	text = "Hello from pi rpc.",
-	log: (message: string) => void = () => undefined,
+	log?: (message: string) => void,
 ): Promise<BridgeHarness> {
 	const root = await mkdtemp(join(tmpdir(), "pi-bridge-"));
 	const llm = await startMockLlm(text);
@@ -125,8 +123,6 @@ export async function createBridgeHarness(
 	});
 	return {
 		bridge,
-		agentDir,
-		workspace,
 		llm,
 		open: () => BridgeClient.connect(bridge.port),
 		async close() {

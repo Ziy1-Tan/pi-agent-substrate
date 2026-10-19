@@ -63,12 +63,12 @@ test("bridge serves bridge_state and retains the last turn result", async (t) =>
 	client.send({ id: "state-1", type: "bridge_get_state", requestId: "req-1" });
 	const state = await client.waitFor((event) => event.type === "bridge_state" && event.id === "state-1");
 	assert.equal(state.streaming, false);
-	assert.deepEqual(state.result, { requestId: "req-1", text: "remember me", replayed: false });
+	assert.deepEqual(state.result, { requestId: "req-1", text: "remember me" });
 
 	client.send({ id: "lookup-1", type: "bridge_result", requestId: "req-1" });
 	const lookup = await client.waitFor((event) => event.type === "bridge_result_reply" && event.id === "lookup-1");
 	assert.equal(lookup.found, true);
-	assert.deepEqual(lookup.result, { requestId: "req-1", text: "remember me", replayed: false });
+	assert.deepEqual(lookup.result, { requestId: "req-1", text: "remember me" });
 });
 
 test("a second prompt continues the same session", async (t) => {

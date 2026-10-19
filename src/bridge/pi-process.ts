@@ -113,6 +113,12 @@ export class PiActivity {
 		this.lastAssistantText = undefined;
 	}
 
+	/** Drops stream state after a child restart, keeping session metadata. */
+	resetStream(): void {
+		this.beginTurn();
+		this.streaming = false;
+	}
+
 	observe(event: unknown): void {
 		if (isTextDelta(event)) this.text += event.assistantMessageEvent.delta;
 		const completed = assistantText(event);

@@ -20,8 +20,6 @@ export interface BridgeOptions {
 	 * Pi then continues the session file instead of starting a new one.
 	 */
 	sessionId?: string;
-	/** Restart `pi` when it exits while a client is connected. */
-	restartPi?: boolean;
 	/** Extra environment for the Pi child. */
 	piEnv?: NodeJS.ProcessEnv;
 	/** Port the bridge listens on inside the sandbox. */
@@ -39,7 +37,6 @@ export interface Bridge {
 export interface TurnResult {
 	requestId: string;
 	text: string;
-	replayed: boolean;
 }
 
 /**
@@ -98,9 +95,41 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 	};
 
 	let closing = false;
-	const restartPi = options.restartPi ?? true;
 	const piArgs = ["--mode", "rpc", ...(options.piArgs ?? []), ...(options.sessionDir ? ["--session-dir", options.sessionDir] : [])];
 	if (options.sessionId) piArgs.push("--session-id", options.sessionId);
+	const pi = new PiProcess({
+		command: options.piCommand ?? process.env.PI_BIN ?? "pi",
+		args: piArgs,
+		cwd: process.env.PI_BRIDGE_CWD || process.cwd(),
+		env: { ...process.env, ...options.piEnv },
+		onStderr: (line) => log(`pi stderr: ${line}`),
+		// A new child has no in-memory stream state. Settled results survive in
+		// `results`; only the partial text is discarded.
+		onStart: () => activity.resetStream(),
+		onEvent: (event) => {
+			activity.observe(event);
+			broadcast(event);
+			const settled = activity.settledText(event);
+			if (settled !== undefined && currentRequestId) {
+				const result: TurnResult = { requestId: currentRequestId, text: settled };
+				results.set(currentRequestId, result);
+				broadcast({ type: "bridge_result", ...result });
+				currentRequestId = undefined;
+			}
+		},
+		onExit: (code, signal) => {
+			log(`pi exited code=${code} signal=${signal}`);
+			broadcast({ type: "bridge_exit", code, signal });
+			// A snapshot restore can leave a dead child behind; bring it back on the
+			// same session id so the conversation continues in place. Waiting for a
+			// client avoids burning a restart on an actor nobody is talking to.
+			if (!closing) {
+				setTimeout(() => {
+					if (!closing && wss.clients.size > 0) startPi();
+				}, 250).unref?.();
+			}
+		},
+	});
 	const startPi = () => {
 		if (pi.ready) return;
 		try {
@@ -110,42 +139,6 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 			log(`pi failed to start: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	};
-
-	const pi = new PiProcess({
-		command: options.piCommand ?? process.env.PI_BIN ?? "pi",
-		args: piArgs,
-		cwd: process.env.PI_BRIDGE_CWD || process.cwd(),
-		env: { ...process.env, ...options.piEnv },
-		onStderr: (line) => log(`pi stderr: ${line}`),
-		onStart: () => {
-			// A new child has no in-memory stream state. Keep the settled results
-			// (they are what a reconnecting gateway needs) but drop the partial.
-			activity.beginTurn();
-			activity.observe({ type: "agent_settled" });
-		},
-		onEvent: (event) => {
-			activity.observe(event);
-			broadcast(event);
-			const settled = activity.settledText(event);
-			if (settled !== undefined && currentRequestId) {
-				const result: TurnResult = { requestId: currentRequestId, text: settled, replayed: false };
-				results.set(currentRequestId, result);
-				broadcast({ type: "bridge_result", ...result });
-				currentRequestId = undefined;
-			}
-		},
-		onExit: (code, signal) => {
-			log(`pi exited code=${code} signal=${signal}`);
-			broadcast({ type: "bridge_exit", code, signal });
-			if (restartPi && !closing) {
-				// A snapshot restore can leave a dead child behind; bring it back on
-				// the same session id so the conversation continues in place.
-				setTimeout(() => {
-					if (!closing && wss.clients.size > 0) startPi();
-				}, 250).unref?.();
-			}
-		},
-	});
 	// Pi spends a cold start loading extensions and skills; defer it until a
 	// client connects so the golden snapshot captures an idle bridge rather
 	// than a half-started child.
@@ -166,11 +159,10 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 		socket.on("message", (data: Buffer) => {
 			const parsed = parseRecord(String(data).trim());
 			if (parsed === undefined || typeof parsed !== "object") {
-				socket.send(JSON.stringify({ type: "bridge_error", error: "command is not a JSON object" }));
+				sendError(socket, undefined, "command is not a JSON object");
 				return;
 			}
 			const command = parsed as RpcCommand;
-			if (process.env.PI_BRIDGE_DEBUG) log(`recv ${JSON.stringify(command).slice(0, 200)}`);
 			if (command.type === "bridge_get_state") {
 				const wanted = typeof command.requestId === "string" ? command.requestId : undefined;
 				const found = wanted ? results.get(wanted) : undefined;
@@ -198,12 +190,9 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 				return;
 			}
 			if (command.type === "prompt") {
-				const requestId =
-					typeof command.requestId === "string"
-						? command.requestId
-						: typeof command.id === "string"
-							? command.id
-							: undefined;
+				// Pi's own id field is optional; the gateway's requestId is what
+				// the settled result is keyed by, so accept either.
+				const requestId = stringField(command.requestId) ?? stringField(command.id);
 				if (requestId !== undefined) {
 					activity.beginTurn();
 					currentRequestId = requestId;
@@ -212,13 +201,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 			try {
 				pi.send(command as unknown as Record<string, unknown>);
 			} catch (error) {
-				socket.send(
-					JSON.stringify({
-						type: "bridge_error",
-						id: command.id,
-						error: error instanceof Error ? error.message : String(error),
-					}),
-				);
+				sendError(socket, command.id, error);
 			}
 		});
 	});
@@ -233,4 +216,13 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 			await pi.stop();
 		},
 	};
+}
+
+function stringField(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function sendError(socket: WebSocket, id: unknown, error: unknown): void {
+	const message = error instanceof Error ? error.message : String(error);
+	socket.send(JSON.stringify({ type: "bridge_error", id, error: message }));
 }

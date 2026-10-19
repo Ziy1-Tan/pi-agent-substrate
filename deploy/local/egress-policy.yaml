@@ -1,16 +1,14 @@
-# Local, single-user setup: the actor may reach the model provider and the
-# Telegram Bot API. Nothing else is allowed, so a leaked prompt cannot exfiltrate
-# to an arbitrary host.
+# Local, single-user setup: the actor may reach the model provider.
 #
-# Replace the hostnames and ports when the provider changes. Telegram is listed
-# because the bot long-polls from the gateway, not from the actor; an actor that
-# runs `pi` only needs the model provider. Keeping the entry here is harmless
-# and documents the two endpoints a full setup uses.
+# The provider is reached over TLS, so the rule is `https`, not `http`. An
+# `http` rule only authorizes cleartext traffic and contributes no SNI rule;
+# with no SNI rule the egress data plane denies the TLS handshake outright,
+# which Pi reports as a bare "Connection error."
 metadata:
   atespace: pi-agents
   name: default
 rules:
-- http:
+- https:
     hostnames:
     - tokenhub.tencentmaas.com
     ports:

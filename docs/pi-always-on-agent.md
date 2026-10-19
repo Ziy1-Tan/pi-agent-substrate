@@ -512,8 +512,13 @@ e2e 分三层，职责不同。
   - `src/bin/web.ts` 默认监听 `127.0.0.1`；页面没有鉴权，只有显式设置 `PI_WEB_HOST=0.0.0.0` 才允许同网段访问。
 - [x] 未覆盖：真实 bot token 的端到端 smoke 需要外部网络与一个测试 bot，留作手动步骤；Discord 未实现，设计文档仍把它列为后续项。
 
-### 本地真实 provider 的已知阻塞
+### 真实 provider 的接入要点（已修复）
 
-- 这台 kind 集群的 egress 数据面对**公网域名**不生效：策略在 API 层接受（`get egress-policy` 能读回规则），但 `atenet-egress` 对 `tokenhub.tencentmaas.com:443` 报 `chain: denied, details: filter_chain_not_found`，actor 侧表现为 Pi 的 `Connection error.` 与空回复。
-- 换成 `api.github.com` 同样被拒，说明不是某个域名的问题；集群内 Service 域名（mock LLM）则正常。
-- 因此挂起/唤醒的完整闭环用 mock provider 验证；真实模型需要支持公网 egress 的集群（或在安装 substrate 时开启对应选项）。
+真实 provider 跑不通有过两个独立原因，都不是集群故障：
+
+1. **规则类型写错**。策略里用 `http:` 只授权明文流量；`Policy.SNIRules(port)` 只为 `https` 和 `tls_passthrough` 生成 SNI 规则，`http` 规则被跳过。结果是 `sniRules: 0`，egress 数据面对 TLS 握手返回 `chain: denied, details: filter_chain_not_found`，Pi 表现为 `Connection error.`。把规则改成 `https:` 后 `sniRules: 1`，握手不再被拒。
+2. **actor 不信任 egress 的 MITM CA**。`https` 规则意味着 TLS 在网关终结，网关用内置 CA 现签叶子证书；这个叶子链不到公共根，Node 会直接拒绝。substrate 提供 `systemInfo` + `trustBundle` 卷来投影信任锚，运行时需要设置 `NODE_EXTRA_CA_CERTS` 指向该文件（见 `docs/egress-trust-bundle.md`）。
+
+修复后本机实测：`deepseek-v4-pro` 返回完整中文回复，首 token 约 7 秒（含 actor 冷启动与推理）。
+
+模板因此多了两样东西：`system-info` 卷（`egress-mitm.ate.dev` + `system-roots.ate.dev`），以及 `NODE_EXTRA_CA_CERTS` / `SSL_CERT_FILE` 两个环境变量。mock provider 走明文，不需要它们，但保留在同一个模板里没有副作用。

@@ -28,6 +28,14 @@ containers:
     value: "1"
   - name: PI_SKIP_VERSION_CHECK
     value: "1"
+  # An `https` egress rule is terminated at the gateway, which mints the leaf
+  # the actor sees. That leaf chains to the substrate CA, not a public root,
+  # so Node rejects it unless the projected bundle is trusted. Without this
+  # Pi reports a bare "Connection error." after the TLS handshake.
+  - name: NODE_EXTRA_CA_CERTS
+    value: /run/ate/egress-trust-bundle/trust-bundle.pem
+  - name: SSL_CERT_FILE
+    value: /run/ate/egress-trust-bundle/trust-bundle.pem
   wakeupProbe:
     httpGet:
       path: /healthz
@@ -35,6 +43,8 @@ containers:
   volumeMounts:
   - name: workspace
     mountPath: /workspace
+  - name: system-info
+    mountPath: /run/ate
 resources:
   limits:
   - name: cpu
@@ -52,3 +62,13 @@ snapshotConfig:
 volumes:
 - name: workspace
   durableDir: {}
+# Projected trust anchors: the egress gateway CA plus public roots. Substrate
+# only resolves these well-known bundle names.
+- name: system-info
+  systemInfo:
+    dataSources:
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        - system-roots.ate.dev
+        path: egress-trust-bundle/trust-bundle.pem

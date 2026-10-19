@@ -21,9 +21,15 @@
 #   CONVERSATION      conversation to pre-create an actor for (default: local/chat)
 #   ACTOR             actor name (default: derived from CONVERSATION, matching
 #                     the gateway's mapping: local/chat -> pi-local-chat)
-#   PROVIDER          provider name in models.json (default: tokenhub)
-#   PI_MODEL          model id (default: deepseek-v4-pro)
-#   PI_MODELS_JSON    models.json to read (default: ~/.pi/agent/models.json)
+#   PROVIDER_ENV      provider config file, sourced if present
+#                     (default: deploy/local/provider.env)
+#   PI_PROVIDER       provider id (required)
+#   PI_MODEL          model id (required)
+#   PI_PROVIDER_BASE_URL  provider endpoint (required)
+#   PI_PROVIDER_API   wire protocol, e.g. openai-completions (required)
+#   PI_PROVIDER_API_KEY   API key, written to a Secret (required)
+#   PI_MODEL_CONTEXT_WINDOW / PI_MODEL_MAX_TOKENS
+#                     optional model metadata (Pi defaults: 128000 / 16384)
 #   EGRESS_POLICY     egress manifest template (default:
 #                     deploy/local/egress-policy.yaml.tmpl)
 #   PROVIDER_HOST     host named in the egress policy (default: parsed from the
@@ -49,9 +55,7 @@ CONVERSATION="${CONVERSATION:-local/chat}"
 # The replacement uses -E because BSD sed does not understand `\+`.
 CONVERSATION_SLUG="$(printf '%s' "${CONVERSATION}" | tr '[:upper:]' '[:lower:]' | sed -E -e 's/[^a-z0-9-]+/-/g' -e 's/^-+//' -e 's/-+$//' | cut -c1-40)"
 ACTOR="${ACTOR:-pi-${CONVERSATION_SLUG:-conversation}}"
-PROVIDER="${PROVIDER:-tokenhub}"
-PI_MODEL="${PI_MODEL:-deepseek-v4-pro}"
-PI_MODELS_JSON="${PI_MODELS_JSON:-$HOME/.pi/agent/models.json}"
+PROVIDER_ENV="${PROVIDER_ENV:-deploy/local/provider.env}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/local/egress-policy.yaml.tmpl}"
 SECRET_NAME="${SECRET_NAME:-pi-provider}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
@@ -66,10 +70,26 @@ need docker
 need node
 need "${KUBECTL_ATE}"
 
-if [[ ! -f "${PI_MODELS_JSON}" ]]; then
-  echo "no models.json at ${PI_MODELS_JSON}; set PI_MODELS_JSON" >&2
-  exit 1
+# provider.env is the source of truth when it exists; exporting the same
+# values in the shell is optional.
+if [[ -f "${PROVIDER_ENV}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${PROVIDER_ENV}"
+  set +a
 fi
+
+require() {
+  if [[ -z "$1" ]]; then
+    echo "$2 is not set; copy deploy/local/provider.env.example to ${PROVIDER_ENV} and fill it in" >&2
+    exit 1
+  fi
+}
+require "${PI_PROVIDER:-}" PI_PROVIDER
+require "${PI_MODEL:-}" PI_MODEL
+require "${PI_PROVIDER_BASE_URL:-}" PI_PROVIDER_BASE_URL
+require "${PI_PROVIDER_API:-}" PI_PROVIDER_API
+require "${PI_PROVIDER_API_KEY:-}" PI_PROVIDER_API_KEY
 
 echo "==> building and pushing the actor image"
 npm run build
@@ -100,28 +120,12 @@ if [[ -z "${ACTOR_DIGEST}" ]]; then
 fi
 ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 
-# Reads one field of the selected provider. Keeping the key out of the actor
-# means reading it exactly where it is written to the Secret.
-provider_field() {
-  node -e '
-    const fs = require("node:fs");
-    const [file, name, field] = process.argv.slice(1);
-    const provider = JSON.parse(fs.readFileSync(file, "utf8")).providers?.[name];
-    const value = provider?.[field];
-    if (!value) {
-      console.error(`provider ${name} has no ${field} in ${file}`);
-      process.exit(1);
-    }
-    process.stdout.write(String(value));
-  ' "${PI_MODELS_JSON}" "${PROVIDER}" "$1"
-}
-
 # `read` needs a terminating newline: without one it returns non-zero and
 # errexit would end the script here.
 read -r inferred_host inferred_port < <(node -e '
   const url = new URL(process.argv[1]);
   process.stdout.write(`${url.hostname} ${url.port || (url.protocol === "https:" ? 443 : 80)}\n`);
-' "$(provider_field baseUrl)")
+' "${PI_PROVIDER_BASE_URL}")
 PROVIDER_HOST="${PROVIDER_HOST:-${inferred_host}}"
 PROVIDER_PORT="${PROVIDER_PORT:-${inferred_port}}"
 CREDENTIAL_URI="${CREDENTIAL_URI:-ate-secret://k8s.io/default/${ATESPACE}/${SECRET_NAME}/api-key}"
@@ -134,7 +138,7 @@ sed -e "s#\${PROVIDER_HOST}#${PROVIDER_HOST}#" \
 
 echo "==> creating the provider secret"
 "${kube[@]}" -n "${ATESPACE}" create secret generic "${SECRET_NAME}" \
-  --from-literal=api-key="$(provider_field apiKey)" \
+  --from-literal=api-key="${PI_PROVIDER_API_KEY}" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -
 
 # The credential provider is default-deny: without this the gateway cannot
@@ -164,26 +168,14 @@ if ! printf '%s' "${policy}" | grep -q "atespace: ${ATESPACE}\$"; then
   "${kube[@]}" -n ate-system rollout status deployment/k8s-credential-provider --timeout=120s
 fi
 
-echo "==> creating the actor template (${PROVIDER}/${PI_MODEL})"
-MODELS_JSON="$(node -e '
-  const fs = require("node:fs");
-  const [file, name] = process.argv.slice(1);
-  const provider = JSON.parse(fs.readFileSync(file, "utf8")).providers?.[name];
-  if (!provider) {
-    console.error(`provider ${name} not found in ${file}`);
-    process.exit(1);
-  }
-  // Only the selected provider is copied into the sandbox; the other entries
-  // in the workstation catalog are not part of this deployment. The API key
-  // is replaced by a placeholder: the egress gateway rewrites the header, so
-  // the real key never reaches the actor spec, its env, or a snapshot.
-  const sanitized = { ...provider, apiKey: "egress-injected" };
-  process.stdout.write(JSON.stringify({ providers: { [name]: sanitized } }));
-' "${PI_MODELS_JSON}" "${PROVIDER}")"
+echo "==> creating the actor template (${PI_PROVIDER}/${PI_MODEL})"
 sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
-    -e "s#\${MODELS_JSON}#${MODELS_JSON}#" \
-    -e "s#\${PROVIDER}#${PROVIDER}#" \
+    -e "s#\${PROVIDER}#${PI_PROVIDER}#" \
     -e "s#\${MODEL_ID}#${PI_MODEL}#" \
+    -e "s#\${BASE_URL}#${PI_PROVIDER_BASE_URL}#" \
+    -e "s#\${API}#${PI_PROVIDER_API}#" \
+    -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
+    -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
     deploy/test/actor-template.json.tmpl > bin/actor-template.json
 # A template is immutable, so a rerun cannot replace it. Creating one is
 # therefore best-effort: an existing template is reused as-is, and the warning

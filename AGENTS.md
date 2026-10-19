@@ -89,10 +89,12 @@ test agent's `settings.json` or a one-second injected failure takes fourteen.
 
 ## Local deployment
 
-`hack/deploy-local.sh` builds the image, creates a template from one provider
-in `~/.pi/agent/models.json`, writes the key to a Secret, grants the atespace
-access, and prints the gateway command. Two names must match the gateway: the
-actor name derives from the conversation id (`local/chat` → `pi-local-chat`),
+`hack/deploy-local.sh` builds the image, creates a template from
+`deploy/local/provider.env` (provider, model, endpoint, wire API, key), writes
+the key to a Secret, grants the atespace access, and prints the gateway
+command. The bridge composes Pi's `models.json` from the non-secret values.
+Two names must match the gateway: the actor name derives from the conversation
+id (`local/chat` → `pi-local-chat`),
 and `PI_ACTOR_TEMPLATE` defaults to `pi-actor` while a local deploy creates
 `pi-local`. BSD `sed` has no `\+`; use `-E`. `read` fails on input without a
 trailing newline, which ends the script under `errexit`. zsh's nvm loader

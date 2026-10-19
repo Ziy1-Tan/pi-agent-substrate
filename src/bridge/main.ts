@@ -13,8 +13,10 @@
  *   PI_CODING_AGENT_DIR   Pi config directory (default `/workspace/.pi`)
  *   PI_SESSION_DIR        Pi session directory (default `/workspace/.pi/sessions`)
  *   PI_BRIDGE_CWD         Working directory for Pi (default /workspace)
- *   PI_MODEL / PI_PROVIDER  Model selection passed to Pi
- *   PI_MODELS_JSON        Contents of models.json, written at startup
+ *   PI_PROVIDER / PI_MODEL  Model selection passed to Pi
+ *   PI_PROVIDER_BASE_URL  Provider endpoint for models.json
+ *   PI_PROVIDER_API       Wire protocol, e.g. openai-completions
+ *   PI_MODEL_CONTEXT_WINDOW / PI_MODEL_MAX_TOKENS  Optional model metadata
  */
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -34,11 +36,36 @@ const agentDir = process.env.PI_CODING_AGENT_DIR ?? "/workspace/.pi";
 await mkdir(sessionDir, { recursive: true });
 await mkdir(agentDir, { recursive: true });
 
-// An ActorTemplate carries literal env values only, so the model catalog is
-// handed over as JSON rather than a mounted file. Written once per sandbox;
-// a snapshot restore keeps the same content.
-const modelsJson = process.env.PI_MODELS_JSON;
-if (modelsJson) await writeFile(`${agentDir}/models.json`, modelsJson);
+// An ActorTemplate carries literal env values only, and Pi reads its catalog
+// from a file. Build the one provider the actor needs here. The key is a
+// placeholder: the egress gateway replaces the Authorization header, so the
+// real key never enters the sandbox.
+const providerId = process.env.PI_PROVIDER;
+const modelId = process.env.PI_MODEL;
+const baseUrl = process.env.PI_PROVIDER_BASE_URL;
+const api = process.env.PI_PROVIDER_API;
+if (!providerId || !modelId || !baseUrl || !api) {
+	throw new Error("PI_PROVIDER, PI_MODEL, PI_PROVIDER_BASE_URL and PI_PROVIDER_API are required");
+}
+const model: Record<string, unknown> = { id: modelId };
+const contextWindow = positiveNumber(process.env.PI_MODEL_CONTEXT_WINDOW);
+if (contextWindow) model.contextWindow = contextWindow;
+const maxTokens = positiveNumber(process.env.PI_MODEL_MAX_TOKENS);
+if (maxTokens) model.maxTokens = maxTokens;
+await writeFile(
+	`${agentDir}/models.json`,
+	JSON.stringify({
+		providers: {
+			[providerId]: { baseUrl, api, apiKey: "egress-injected", models: [model] },
+		},
+	}),
+);
+
+function positiveNumber(value: string | undefined): number | undefined {
+	if (!value) return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 const extraArgs = (process.env.PI_BRIDGE_ARGS ?? "")
 	.split(/\s+/)

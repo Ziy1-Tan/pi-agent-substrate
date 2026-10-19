@@ -1,11 +1,16 @@
-# ActorTemplate for the clustered e2e, in ateapipb protojson form.
+# ActorTemplate for local and clustered deployments, in ateapipb protojson form.
 #
 # The template is immutable. Changing the image, env, or resources means
 # creating a new template (and a new actor that uses it).
 #
-# ${...} placeholders are filled by hack/e2e-kind.sh:
-#   ACTOR_IMAGE   digest-pinned actor image in the local registry
-#   MODELS_JSON   the mock provider's models.json, inlined as an env value
+# ${...} placeholders are filled by hack/e2e-kind.sh or hack/deploy-local.sh:
+#   ACTOR_IMAGE     digest-pinned actor image in the local registry
+#   PROVIDER        provider id
+#   MODEL_ID        model id
+#   BASE_URL        provider endpoint
+#   API             wire protocol, e.g. openai-completions
+#   CONTEXT_WINDOW  model context window
+#   MAX_TOKENS      model output limit
 metadata:
   atespace: pi-agents
   name: pi-actor
@@ -20,8 +25,17 @@ containers:
     value: '${PROVIDER}'
   - name: PI_MODEL
     value: '${MODEL_ID}'
-  - name: PI_MODELS_JSON
-    value: '${MODELS_JSON}'
+  # The bridge composes Pi's models.json from these values at startup. The API
+  # key is deliberately absent: Pi sends a placeholder Authorization header
+  # and the egress gateway replaces it.
+  - name: PI_PROVIDER_BASE_URL
+    value: '${BASE_URL}'
+  - name: PI_PROVIDER_API
+    value: '${API}'
+  - name: PI_MODEL_CONTEXT_WINDOW
+    value: '${CONTEXT_WINDOW}'
+  - name: PI_MODEL_MAX_TOKENS
+    value: '${MAX_TOKENS}'
   # Actor egress only passes the urls an EgressPolicy allows; Pi's startup
   # update and model-catalog checks would otherwise wait on a denied request.
   - name: PI_OFFLINE

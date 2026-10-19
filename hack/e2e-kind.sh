@@ -18,9 +18,12 @@
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
 #   WEB_PORT          port for the browser-channel e2e (default: 8899)
 #   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
-#   PROVIDER          "mock" (default) or "tokenhub"; a real provider needs
-#                     PI_MODELS_JSON and an egress policy that reaches it
-#   PI_MODELS_JSON    models.json for a real provider, inlined into the template
+#   PROVIDER          "mock" (default) or a real provider id; a real provider
+#                     also needs the PI_PROVIDER_* values below and an egress
+#                     policy that reaches it
+#   PI_MODEL          model id for a real provider
+#   PI_PROVIDER_BASE_URL / PI_PROVIDER_API
+#                     endpoint and wire protocol for a real provider
 #   EGRESS_POLICY     manifest applied to the actor (default: the mock policy)
 #   ONLY              "deploy" to skip the e2e, "e2e" to skip the deploy
 set -o errexit -o nounset -o pipefail
@@ -39,7 +42,6 @@ IDLE_SECONDS="${IDLE_SECONDS:-15}"
 WEB_PORT="${WEB_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
 PROVIDER="${PROVIDER:-mock}"
-PI_MODELS_JSON="${PI_MODELS_JSON:-}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/test/egress-policy.yaml}"
 ONLY="${ONLY:-}"
 
@@ -94,22 +96,23 @@ if [[ "${ONLY}" != "e2e" ]]; then
 
   echo "==> creating the actor template"
   if [[ "${PROVIDER}" == "mock" ]]; then
-    MODELS_JSON="$(node -e 'console.log(JSON.stringify({providers:{mock:{baseUrl:"http://mock-llm.'"${ATESPACE}"'.svc.cluster.local:8080/v1",api:"openai-completions",apiKey:"mock",compat:{supportsDeveloperRole:false,supportsReasoningEffort:false,supportsUsageInStreaming:false},models:[{id:"mock-model",name:"mock",contextWindow:100000,maxTokens:4096}]}}}))')"
-    MODEL_ID="mock-model"
+    PI_PROVIDER=mock
+    PI_MODEL=mock-model
+    PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
+    PI_PROVIDER_API=openai-completions
   else
-    # A real provider's catalog is too large to paste into this script, so the
-    # caller supplies the same models.json Pi reads on the workstation.
-    if [[ -z "${PI_MODELS_JSON}" ]]; then
-      echo "PROVIDER=${PROVIDER} needs PI_MODELS_JSON" >&2
-      exit 1
-    fi
-    MODELS_JSON="$(cat "${PI_MODELS_JSON}")"
-    MODEL_ID="${PI_MODEL:-deepseek-v4-pro}"
+    PI_PROVIDER="${PI_PROVIDER:-${PROVIDER}}"
+    [[ -n "${PI_MODEL:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_MODEL" >&2; exit 1; }
+    [[ -n "${PI_PROVIDER_BASE_URL:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_PROVIDER_BASE_URL" >&2; exit 1; }
+    [[ -n "${PI_PROVIDER_API:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_PROVIDER_API" >&2; exit 1; }
   fi
   sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
-      -e "s#\${MODELS_JSON}#${MODELS_JSON}#" \
-      -e "s#\${PROVIDER}#${PROVIDER}#" \
-      -e "s#\${MODEL_ID}#${MODEL_ID}#" \
+      -e "s#\${PROVIDER}#${PI_PROVIDER}#" \
+      -e "s#\${MODEL_ID}#${PI_MODEL}#" \
+      -e "s#\${BASE_URL}#${PI_PROVIDER_BASE_URL}#" \
+      -e "s#\${API}#${PI_PROVIDER_API}#" \
+      -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
+      -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
       deploy/test/actor-template.json.tmpl > bin/actor-template.json
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.json
 

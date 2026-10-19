@@ -50,12 +50,36 @@ a local registry on `localhost:5001`, and `kubectl-ate` on `PATH`.
 ### Run it
 
 ```sh
-PROVIDER=tokenhub PI_MODEL=deepseek-v4-pro ./hack/deploy-local.sh   # real model
-./hack/e2e-kind.sh                                                  # mock model
+cp deploy/local/provider.env.example deploy/local/provider.env
+$EDITOR deploy/local/provider.env     # provider, model, endpoint, API, key
+./hack/deploy-local.sh                # real model
+./hack/e2e-kind.sh                    # mock model
 ```
 
-The first builds the actor image, creates a template, writes the API key to a
-Secret, and prints the gateway command. The second needs no key or network.
+The first builds the actor image, creates a template from the values in
+`provider.env`, writes the API key to a Secret, and prints the gateway
+command. The bridge builds Pi's model catalog at startup. The second needs no
+key or network.
+
+### Provider settings
+
+A single model call needs five values. They live in
+`deploy/local/provider.env`, which is gitignored:
+
+| Variable | Meaning |
+|---|---|
+| `PI_PROVIDER` | Provider id Pi passes as `--provider` |
+| `PI_MODEL` | Model id Pi passes as `--model` |
+| `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1` |
+| `PI_PROVIDER_API` | Wire protocol: `openai-completions` or `anthropic-messages` |
+| `PI_PROVIDER_API_KEY` | Key, written to a Kubernetes Secret and injected on egress |
+
+Pi defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
+`PI_MODEL_CONTEXT_WINDOW` or `PI_MODEL_MAX_TOKENS` only when the model differs.
+
+The endpoint and API are ordinary configuration and go into the actor
+template. The key does not: the actor sends a placeholder `Authorization`
+header, and the EgressPolicy replaces it with the value from the Secret.
 
 ### Talk to it
 

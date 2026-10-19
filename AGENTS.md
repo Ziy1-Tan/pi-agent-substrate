@@ -1,41 +1,26 @@
 # Notes for agents working in this repository
 
-Operational knowledge that is not visible from the code. Everything here
-was learned by running against a real kind cluster with a real provider;
-each item cost time to find the first time.
-
-Architecture and design live in [docs/architecture.md](docs/architecture.md).
-This file only records the traps.
+Runtime traps from running against a live kind cluster; architecture is in
+[docs/architecture.md](docs/architecture.md).
 
 ## Egress
 
 An actor has no network access until an `EgressPolicy` names a destination.
-Two independent failures produce the same symptom — Pi reports a bare
-`Connection error.` — so check both before looking anywhere else.
+A missing policy is not an error: the turn settles with no text, which is why
+the manager calls `provision` first. Two other failures surface as Pi's bare
+`Connection error.`
 
 ### An `http` rule does not authorize HTTPS
 
-`http:` in a policy allows cleartext only. `Policy.SNIRules(port)` emits SNI
-rules for `https` and `tls_passthrough` and skips `http` entirely, so an
-`http` rule against an HTTPS endpoint leaves `sniRules: 0`. The egress data
-plane then answers the TLS handshake with
-`chain: denied, details: filter_chain_not_found`, and Pi surfaces nothing
-more useful than a connection error.
-
-Use `https:` for anything reached over TLS, including an OpenAI-compatible
-endpoint at an `https://` base URL.
-
-```bash
-kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep 'egress denied'
-# look for sniRules in the "egress tunnel opened" line; 0 means the rule type is wrong
-```
+`Policy.SNIRules(port)` emits rules only for `https` and `tls_passthrough`, so
+an `http` rule leaves `sniRules: 0` and the handshake fails with
+`filter_chain_not_found`. Use `https:` for anything reached over TLS.
 
 ### An `https` rule requires trusting the egress CA
 
-An `https` rule terminates TLS at the gateway, which mints a leaf for the
-destination from its own CA. That chain reaches no public root, so Node
-rejects it. The actor needs the projected trust bundle mounted and pointed
-at by the runtime:
+TLS terminates at the gateway,
+which mints a leaf from its own CA that chains to no public root. Mount the
+projected bundle:
 
 ```yaml
 volumes:
@@ -47,143 +32,69 @@ volumes:
         path: egress-trust-bundle/trust-bundle.pem
 ```
 
-and the container needs:
-
-```yaml
-- name: NODE_EXTRA_CA_CERTS
-  value: /run/ate/egress-trust-bundle/trust-bundle.pem
-- name: SSL_CERT_FILE
-  value: /run/ate/egress-trust-bundle/trust-bundle.pem
-```
-
-The bundle is re-resolved on every Run/Restore; a runtime that reads it once
-sees a rotation at the next resume.
-
-To tell the two failures apart: a `filter_chain_not_found` failure is
-instant and never reaches the destination. A trust failure shows a completed
-handshake in the egress byte counters (`up_bytes`, `down_bytes`, `code: 200`)
-followed by Pi giving up in well under a second.
-
-### One policy per actor, applied after the actor exists
-
-`EgressPolicy` is nested under an actor, not under the atespace. A gateway
-that creates an actor and forgets the policy gets a turn that completes with
-no text — the provider call is denied, Pi retries, and then settles empty.
-That is why the manager calls its `provision` hook before the first turn.
+and set `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` to
+`/run/ate/egress-trust-bundle/trust-bundle.pem`. A missing SNI rule fails
+instantly without reaching the destination; a trust failure completes the
+handshake (egress byte counters move) and Pi gives up in well under a second.
+Both log under `grep 'egress denied'` in `kubectl -n ate-system logs
+deploy/atenet-egress -c ext-proc`.
 
 ## Credential injection
 
-The model key does not need to enter the actor. Pi sends
-`Authorization: Bearer <apiKey>` by default, so the key in `models.json` can
-be a placeholder, and the policy replaces the header on the way out:
+Pi sends `Authorization: Bearer <apiKey>` by default, so `models.json` carries
+a placeholder and the policy swaps the header:
 
 ```yaml
-rules:
-- https:
-    hostnames: [tokenhub.example.com]
-    effects:
-      replaceHeaders:
-      - header: Authorization
-        prefix: "Bearer "
-        credentialUri: ate-secret://k8s.io/default/<namespace>/<secret>/api-key
+effects: {replaceHeaders: [{header: Authorization, prefix: "Bearer ",
+  credentialUri: "ate-secret://k8s.io/default/<ns>/<secret>/api-key"}]}
 ```
 
-Injection works only on an `http` or `https` rule that is the deciding rule
-for the request, and the actor must send the header. Failures are fail-closed:
-403 for a missing secret or an unauthorized atespace, 503 if the provider is
-unreachable.
+The provider is default-deny: the policy ConfigMap ships as `policies: []`, so
+every injection returns 403 until the atespace is listed. It reads that
+ConfigMap once at startup, so restart the deployment after editing.
 
-### The credential provider is default-deny
+## Templates
 
-`k8s-credential-provider-namespace-policy` ships with `policies: []`. Until
-the actor's atespace is listed with the secret's namespace, every injection
-fails with 403. The provider reads this ConfigMap once at startup, so
-editing it alone changes nothing; restart the deployment.
-
-`hack/deploy-local.sh` does both, and is idempotent.
-
-## Actor templates
-
-### A template is immutable
-
-Changing the image, env, or resource limits means a new template name. Rerunning
-a deploy script against an existing name fails with `AlreadyExists`; that is
-expected, not a bug.
-
-### Pin the image by the platform manifest digest
-
-`docker inspect` reports the digest of the multi-arch index. A node that
-pulls that index can end up with a partial image whose container never starts.
-The only symptom is an actor that goes `CRASHED` after a wakeup probe timeout,
-with no application log at all.
-
-Resolve the child manifest for the node's platform instead:
+A template is immutable; changing the image, env, or limits needs a new name,
+and `AlreadyExists` on a rerun is expected. Pin images by the platform manifest
+digest: `docker inspect` reports the multi-arch index, and pulling that index
+can yield a partial image that never starts, with no symptom beyond `CRASHED`
+after a wakeup probe timeout.
 
 ```bash
 curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
   "http://localhost:5001/v2/pi-actor/manifests/local" |
-  jq -r '.manifests[] | select(.platform.architecture=="arm64" and .platform.os=="linux") | .digest'
+  jq -r '.manifests[]|select(.platform.architecture=="arm64")|.digest'
 ```
-
-`hack/deploy-local.sh` does this and pins `name@sha256:...`.
 
 ## Suspend and resume
 
-### Connecting wakes the actor, so never reconnect automatically
-
-A suspended actor is woken by the next connection to its bridge. A transport
-that reconnects on its own therefore turns one suspend into a permanent
-suspend/wake loop, and the actor never sleeps through a full idle window.
-The next turn's `connect()` is the only wake signal.
-
-### A dropped connection invalidates cached turn results
-
-The settled-result cache lives in the bridge process. A suspend removes that
-process, so results from before the suspend are invisible to the restored
-actor. A reused result would mark a turn as done that never ran, so
-`PiBackend` clears the cache on disconnect.
-
-### A failed turn must still settle the lifecycle
-
-`turnStarted()` increments the in-flight count and `turnSettled()` decrements
-it. If a failure skips the settle, the count stays at one. Every later settle
-is then blocked, the state machine never reaches `GRACE`, and the actor never
-suspends again; one provider hiccup would pin a worker. The gateway wraps the
-turn in `try/finally` so every exit settles exactly once.
+Connecting to the bridge wakes the actor, so a transport must never reconnect
+on its own: one suspend becomes a permanent wake loop. The next turn's
+`connect()` is the only wake signal, and a disconnect invalidates the
+settled-result cache those restored actors can no longer see. `turnStarted()`
+increments an in-flight count that only `turnSettled()` decrements; a failure
+that skips the settle blocks every later settle and pins a worker forever, so
+the gateway settles in `finally`.
 
 ## Reporting failures
 
-Pi reports a provider failure on the final assistant message:
-`stopReason: "error"` with `errorMessage`, and an exhausted retry loop emits
-`auto_retry_end` with `success: false` and `finalError`. Ignoring these makes
-a failed turn indistinguishable from one that produced no text.
+Pi reports a provider failure on the final assistant message (`stopReason:
+"error"` plus `errorMessage`), and an exhausted retry emits `auto_retry_end`
+with `success: false` and `finalError`. Without both, a failed turn looks like
+one that produced no text. The bridge sends `bridge_result` before Pi's own
+`agent_settled`, because the gateway settles on the first record it sees.
 
-The bridge sends `bridge_result` before Pi's own `agent_settled`, because
-the gateway settles on the first record it sees. A bare `agent_settled`
-arriving first would settle the turn with empty text.
-
-Pi retries transient errors by default (2s/4s/8s backoff). In a
-failure-injection test that turns a one-second failure into a fourteen-second
-one; write `{"retry":{"enabled":false}}` into the test agent's
-`settings.json`.
+Pi retries with a 2s/4s/8s backoff; set `{"retry":{"enabled":false}}` in a
+test agent's `settings.json` or a one-second injected failure takes fourteen.
 
 ## Local deployment
 
-`hack/deploy-local.sh` builds the actor image, creates a template from one
-provider in `~/.pi/agent/models.json`, writes the key to a Secret, grants the
-atespace access to it, and prints the gateway command.
-
-- The actor name is derived from the conversation id (`local/chat` →
-  `pi-local-chat`), matching the gateway's mapping. Creating an actor under
-  any other name leaves it unused.
-- The printed command includes `PI_ACTOR_TEMPLATE`; the gateway defaults to
-  `pi-actor`, which a local deployment does not create.
-- BSD `sed` does not understand `\+`. Use `-E` for `+` quantifiers.
-- `read` returns non-zero on input without a trailing newline, which ends the
-  script under `errexit`.
-
-## Environment
-
-On this workstation zsh's nvm loader breaks `node` inside compound commands.
-Use the absolute path (`~/.nvm/versions/node/v22.19.0/bin/node`) or run the
-script under `bash`.
+`hack/deploy-local.sh` builds the image, creates a template from one provider
+in `~/.pi/agent/models.json`, writes the key to a Secret, grants the atespace
+access, and prints the gateway command. Two names must match the gateway: the
+actor name derives from the conversation id (`local/chat` → `pi-local-chat`),
+and `PI_ACTOR_TEMPLATE` defaults to `pi-actor` while a local deploy creates
+`pi-local`. BSD `sed` has no `\+`; use `-E`. `read` fails on input without a
+trailing newline, which ends the script under `errexit`. zsh's nvm loader
+breaks `node` in compound commands; use the absolute path or `bash`.

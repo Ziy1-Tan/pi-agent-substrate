@@ -1,14 +1,4 @@
----
-title: Always-on Pi agents on Agent Substrate
-date: 2026-10-18
-tags:
-  - substrate
-  - pi
-  - always-on-agent
-  - agent-runtime
-  - design
-  - spec
----
+# Always-on Pi agents on Agent Substrate
 
 > **In one sentence**
 > Reuse pi-chat's channels and conversation state, always-on-agent's idle

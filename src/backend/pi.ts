@@ -75,18 +75,26 @@ export class PiBackend implements AgentBackend {
 	}
 
 	async connect(): Promise<void> {
-		if (!this.wired) {
-			this.wired = true;
-			this.transport.onRecord((record) => this.handleRecord(record));
-			this.transport.onConnect((isReconnect) => {
-				this.generation += 1;
-				if (isReconnect) this.recoverInFlight();
-			});
-		}
+		this.wire();
 		await this.transport.connect();
 	}
 
+	/**
+	 * Subscribes once. The gateway may open a conversation before its actor
+	 * exists, so wiring cannot assume a successful connect has happened.
+	 */
+	private wire(): void {
+		if (this.wired) return;
+		this.wired = true;
+		this.transport.onRecord((record) => this.handleRecord(record));
+		this.transport.onConnect((isReconnect) => {
+			this.generation += 1;
+			if (isReconnect) this.recoverInFlight();
+		});
+	}
+
 	submit(request: AgentRequest, onDelta: AgentEventListener): Promise<AgentResponse> {
+		this.wire();
 		const cached = this.cached(request.requestId);
 		if (cached) {
 			onDelta(cached.text);
@@ -157,6 +165,29 @@ export class PiBackend implements AgentBackend {
 	async close(): Promise<void> {
 		if (this.active) this.failTurn(this.active.requestId, new Error("backend closed"));
 		await this.transport.close();
+	}
+
+	/**
+	 * Asks Pi to abort the turn and fails it locally. Pi's abort is
+	 * best-effort: the turn may already have settled inside the actor, in
+	 * which case the bridge's cached result is still there for a retry.
+	 */
+	cancel(requestId: string): void {
+		const turn = this.active;
+		if (!turn || turn.requestId !== requestId) return;
+		try {
+			this.transport.send({ id: `abort-${requestId}`, type: "abort" });
+		} catch {
+			// A dead transport is why the turn is being cancelled; the local
+			// rejection below is what the gateway needs either way.
+		}
+		this.failTurn(requestId, new Error("turn cancelled"));
+	}
+
+	/** Drops Pi's session so the next prompt starts without history. */
+	async newSession(): Promise<void> {
+		await this.transport.connect();
+		this.transport.send({ id: `new-session-${Date.now()}`, type: "new_session" });
 	}
 
 	private async dispatch(command: Record<string, unknown>): Promise<void> {

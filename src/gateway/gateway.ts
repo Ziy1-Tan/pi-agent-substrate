@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 import { ConversationRuntime } from "../../third_party/pi-chat/src/runtime.js";
-import type { PendingJob } from "../../third_party/pi-chat/types.js";
+import type {
+	ChatLogRecord,
+	ConversationStatus,
+	PendingJob,
+} from "../../third_party/pi-chat/types.js";
 import type { Checkpoint, GatewayOptions, InboundMessageInput } from "./types.js";
 
 /** Thrown by an injected hook to stop the gateway like a process crash would. */
@@ -58,6 +62,33 @@ export class Gateway {
 		if (queuedJob) this.queue.push(queuedJob);
 		this.signalWork();
 		this.maybeSettle();
+	}
+
+	/** Queue depth and log position, for a client that just reconnected. */
+	status(): ConversationStatus | undefined {
+		if (!this.runtime) return undefined;
+		return this.runtime.getStatus();
+	}
+
+	/** Recent inbound and outbound records, oldest first. */
+	history(limit = 20): ChatLogRecord[] {
+		return this.runtime?.findHistory({ limit }) ?? [];
+	}
+
+	/** Cancels the turn in flight, if any. Queued turns are unaffected. */
+	cancelActive(): boolean {
+		const job = this.active;
+		if (!job || !this.runtime) return false;
+		const requestId = this.runtime.getJobState(job.jobId).dispatched.at(-1)?.requestId ?? job.jobId;
+		if (!this.options.backend.cancel) return false;
+		this.options.backend.cancel(requestId);
+		return true;
+	}
+
+	/** Starts a fresh Pi session for the next turn. */
+	async newSession(): Promise<void> {
+		this.ensureRunning();
+		await this.options.backend.newSession?.();
 	}
 
 	/** Resolves once the queue is empty; rejects if an injected fault fired. */
@@ -118,12 +149,19 @@ export class Gateway {
 			return;
 		}
 
+		// Read before `ready()`: it may move SUSPENDED to IDLE while it checks
+		// the control plane, which would erase the evidence of a resume. A
+		// suspend still in flight counts too: the actor is going down either
+		// way, and this turn is what brings it back.
+		const stateBefore = this.options.lifecycle?.state;
+		const resumed = stateBefore === "SUSPENDED" || stateBefore === "SUSPENDING";
 		if (this.options.lifecycle) {
 			// A retry against a suspended actor has to wake it before the prompt
-			// is written to the bridge.
-			await this.options.lifecycle.ready();
-			this.options.lifecycle.turnStarted();
+			// is written to the bridge. The router creates or resumes it on the
+			// next connect; a failure surfaces as the turn's failure.
+			await this.options.lifecycle.ready().catch(() => undefined);
 		}
+		this.options.lifecycle?.turnStarted();
 
 		// A retry after a crash keeps the original request id.
 		const requestId = state.dispatched.at(-1)?.requestId ?? job.jobId;
@@ -133,8 +171,11 @@ export class Gateway {
 
 		let streamed = "";
 		let previews: Promise<void> = Promise.resolve();
+		const startedAt = Date.now();
+		let firstTokenMillis: number | undefined;
 		const onDelta = (delta: string) => {
 			if (this.stopped) return;
+			firstTokenMillis ??= Date.now() - startedAt;
 			streamed += delta;
 			const snapshot = streamed;
 			previews = previews.then(() => this.options.channel.syncPreview(snapshot));
@@ -162,6 +203,12 @@ export class Gateway {
 		const outbound = await runtime.recordOutbound(response.text, remoteMessageId);
 		await this.options.hooks?.afterOutbound?.();
 		await runtime.recordJobCompleted(outbound?.recordId);
+		this.options.onTurn?.({
+			requestId,
+			turnMillis: Date.now() - startedAt,
+			firstTokenMillis,
+			resumed,
+		});
 		// Only after the turn is fully recorded: a crash between outbound and
 		// completion must not start the idle timer on a half-finished turn.
 		this.options.lifecycle?.turnSettled();

@@ -34,6 +34,10 @@ export interface AgentBackend {
 	 * the same turn's result instead of executing it again.
 	 */
 	submit(request: AgentRequest, onDelta: AgentEventListener): Promise<AgentResponse>;
+	/** Stops an in-flight turn, if the backend can. The turn rejects. */
+	cancel?(requestId: string): void;
+	/** Discards the running conversation inside the actor. */
+	newSession?(): Promise<void>;
 }
 
 export type GatewayHookPoint =
@@ -45,6 +49,17 @@ export type GatewayHookPoint =
 
 export type GatewayHooks = Partial<Record<GatewayHookPoint, () => void | Promise<void>>>;
 
+/** Timing and state the gateway reports after each turn. */
+export interface TurnReport {
+	requestId: string;
+	/** Wall time from dispatch to the settled response. */
+	turnMillis: number;
+	/** Wall time from dispatch to the first streamed delta, when one arrived. */
+	firstTokenMillis?: number;
+	/** True when the turn started from a suspended actor. */
+	resumed: boolean;
+}
+
 export interface GatewayOptions {
 	conversation: ResolvedConversation;
 	channel: Channel;
@@ -53,7 +68,8 @@ export interface GatewayOptions {
 	 * Optional idle-suspend controller. The gateway only reports turn
 	 * boundaries to it; the controller decides when the actor may sleep.
 	 */
-	lifecycle?: Pick<IdleLifecycle, "turnStarted" | "turnSettled" | "ready">;
+	lifecycle?: Pick<IdleLifecycle, "turnStarted" | "turnSettled" | "ready" | "state">;
+	onTurn?: (report: TurnReport) => void;
 	hooks?: GatewayHooks;
 	ownerId?: string;
 }

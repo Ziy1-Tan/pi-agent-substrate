@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-agent-substrate</title>
+<style>
+	:root {
+		color-scheme: light dark;
+		--bg: #fbfbfa;
+		--panel: #ffffff;
+		--ink: #1f2328;
+		--muted: #6b7280;
+		--line: #e3e5e8;
+		--accent: #2563eb;
+		--user: #eef2ff;
+		--bot: #f4f4f5;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #16181c;
+			--panel: #1d2025;
+			--ink: #e6e8eb;
+			--muted: #9aa3ad;
+			--line: #2c3037;
+			--accent: #7aa2ff;
+			--user: #232a3d;
+			--bot: #22262c;
+		}
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+		background: var(--bg);
+		color: var(--ink);
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+	}
+	header {
+		display: flex;
+		gap: 12px;
+		align-items: center;
+		padding: 10px 16px;
+		border-bottom: 1px solid var(--line);
+		background: var(--panel);
+	}
+	header h1 { font-size: 14px; font-weight: 600; margin: 0; }
+	header .spacer { flex: 1; }
+	.pill {
+		font-size: 12px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid var(--line);
+		color: var(--muted);
+		white-space: nowrap;
+	}
+	.pill.live { color: var(--accent); border-color: var(--accent); }
+	.pill.bad { color: #c2410c; border-color: #c2410c; }
+	select, button, input[type="text"] {
+		font: inherit;
+		color: inherit;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		border-radius: 6px;
+		padding: 5px 8px;
+	}
+	button { cursor: pointer; }
+	button:disabled { opacity: .5; cursor: default; }
+	main {
+		flex: 1;
+		overflow-y: auto;
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.turn { display: flex; }
+	.turn.user { justify-content: flex-end; }
+	.bubble {
+		max-width: min(720px, 86%);
+		padding: 9px 12px;
+		border-radius: 10px;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	.turn.user .bubble { background: var(--user); }
+	.turn.bot .bubble { background: var(--bot); }
+	.turn.bot .bubble.pending::after {
+		content: "";
+		display: inline-block;
+		width: 7px;
+		height: 14px;
+		margin-left: 2px;
+		vertical-align: text-bottom;
+		background: var(--muted);
+		animation: blink 1s steps(2, start) infinite;
+	}
+	@keyframes blink { to { visibility: hidden; } }
+	.attachments { margin-top: 6px; font-size: 12px; color: var(--muted); }
+	footer {
+		border-top: 1px solid var(--line);
+		background: var(--panel);
+		padding: 10px 16px;
+	}
+	form { display: flex; gap: 8px; align-items: flex-end; }
+	textarea {
+		flex: 1;
+		font: inherit;
+		color: inherit;
+		background: var(--bg);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 8px 10px;
+		resize: none;
+		min-height: 40px;
+		max-height: 180px;
+	}
+	.hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+	.files { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+	<h1>pi-agent-substrate</h1>
+	<select id="conversation" title="Conversation"></select>
+	<span id="state" class="pill">connecting</span>
+	<span id="seq" class="pill">seq 0</span>
+	<span class="spacer"></span>
+	<button id="status" type="button">status</button>
+	<button id="new" type="button">new session</button>
+	<button id="stop" type="button">stop</button>
+</header>
+<main id="log"></main>
+<footer>
+	<form id="compose">
+		<textarea id="text" rows="1" placeholder="Message the agent"></textarea>
+		<input id="files" type="file" multiple hidden>
+		<button id="attach" type="button" title="Attach files">attach</button>
+		<button id="send" type="submit">send</button>
+	</form>
+	<div class="hint">
+		Enter sends, Shift+Enter inserts a newline. The socket reconnects on its own and replays only what was missed.
+	</div>
+</footer>
+<script type="module">
+	const STORAGE_KEY = "pi-agent-substrate:conversation";
+	const params = new URLSearchParams(location.search);
+	const conversationSelect = document.getElementById("conversation");
+	const statePill = document.getElementById("state");
+	const seqPill = document.getElementById("seq");
+	const log = document.getElementById("log");
+	const form = document.getElementById("compose");
+	const text = document.getElementById("text");
+	const fileInput = document.getElementById("files");
+
+	let conversation = params.get("conversation") || localStorage.getItem(STORAGE_KEY) || "local/chat";
+	let socket;
+	let lastSeq = 0;
+	let attempts = 0;
+	/** Current streamed reply, keyed by turn. Deltas append to it. */
+	let pending = undefined;
+	const pendingFiles = [];
+
+	for (const known of params.getAll("known")) addOption(known);
+	addOption(conversation);
+	conversationSelect.value = conversation;
+
+	function addOption(id) {
+		if (!id || [...conversationSelect.options].some((option) => option.value === id)) return;
+		const option = document.createElement("option");
+		option.value = id;
+		option.textContent = id;
+		conversationSelect.append(option);
+	}
+
+	function connect() {
+		const scheme = location.protocol === "https:" ? "wss" : "ws";
+		const url = `${scheme}://${location.host}/events?conversation=${encodeURIComponent(conversation)}&since=${lastSeq}`;
+		socket = new WebSocket(url);
+		setState("connecting");
+
+		socket.addEventListener("open", () => {
+			attempts = 0;
+			setState("connected");
+		});
+		socket.addEventListener("message", (event) => {
+			let frame;
+			try {
+				frame = JSON.parse(event.data);
+			} catch {
+				return;
+			}
+			handle(frame);
+		});
+		socket.addEventListener("close", () => {
+			setState("reconnecting");
+			// Back off, but keep it short: an idle actor suspends and the next
+			// turn has to resume it, so the client must be ready when it does.
+			const delay = Math.min(5000, 250 * 2 ** attempts++);
+			setTimeout(connect, delay);
+		});
+	}
+
+	/**
+	 * Sequence numbers make replay idempotent: a frame at or below the last
+	 * seen sequence is a duplicate from the reconnect overlap, not new text.
+	 * Previews are whole snapshots, so the newest one wins even when several
+	 * replayed frames land in one tick.
+	 */
+	function handle(frame) {
+		if (typeof frame.seq === "number") {
+			if (frame.seq <= lastSeq) return;
+			lastSeq = frame.seq;
+			seqPill.textContent = `seq ${lastSeq}`;
+		}
+		switch (frame.type) {
+			case "hello":
+				addOption(frame.conversation);
+				break;
+			case "preview":
+				if (!pending) pending = { bubble: addBubble("bot", "") };
+				pending.bubble.textContent = frame.text ?? "";
+				pending.bubble.classList.add("pending");
+				scroll();
+				break;
+			case "final": {
+				const bubble = pending?.bubble ?? addBubble("bot", "");
+				bubble.classList.remove("pending");
+				bubble.textContent = frame.text ?? "";
+				pending = undefined;
+				scroll();
+				break;
+			}
+			case "state":
+				setState(frame.state ?? "unknown");
+				break;
+			case "status":
+				if (frame.queueLength !== undefined) {
+					setState(`${frame.hasActiveJob ? "busy" : "idle"} · queue ${frame.queueLength}`);
+				}
+				break;
+			case "history":
+				for (const record of frame.records ?? []) {
+					if (record.type === "inbound") addBubble("user", record.text, record.attachments);
+					if (record.type === "outbound") addBubble("bot", record.text);
+				}
+				scroll();
+				break;
+			case "error":
+				addBubble("bot", `error: ${frame.text ?? "unknown"}`);
+				break;
+		}
+	}
+
+	function addBubble(role, content, attachments) {
+		const turn = document.createElement("div");
+		turn.className = `turn ${role}`;
+		const bubble = document.createElement("div");
+		bubble.className = "bubble";
+		bubble.textContent = content;
+		turn.append(bubble);
+		if (attachments?.length) {
+			const list = document.createElement("div");
+			list.className = "attachments";
+			list.textContent = attachments.map((file) => file.name ?? file.localPath).join(", ");
+			bubble.append(list);
+		}
+		log.append(turn);
+		return bubble;
+	}
+
+	function scroll() {
+		log.scrollTop = log.scrollHeight;
+	}
+
+	function setState(value) {
+		statePill.textContent = value;
+		statePill.className = "pill";
+		if (value.includes("connected") || value.includes("idle") || value.includes("GRACE")) statePill.classList.add("live");
+		if (value.includes("error") || value.includes("reconnecting")) statePill.classList.add("bad");
+	}
+
+	async function readFiles(files) {
+		const uploads = [];
+		for (const file of files) {
+			const buffer = new Uint8Array(await file.arrayBuffer());
+			let binary = "";
+			for (let index = 0; index < buffer.length; index += 0x8000) {
+				binary += String.fromCharCode(...buffer.subarray(index, index + 0x8000));
+			}
+			uploads.push({ name: file.name, mimeType: file.type || undefined, data: btoa(binary) });
+		}
+		return uploads;
+	}
+
+	form.addEventListener("submit", async (event) => {
+		event.preventDefault();
+		const body = text.value.trim();
+		if (!body && pendingFiles.length === 0) return;
+		if (socket?.readyState !== WebSocket.OPEN) return;
+		const messageId = crypto.randomUUID();
+		addBubble("user", body || "(attachment)", pendingFiles.map((file) => ({ name: file.name })));
+		scroll();
+		const uploads = await readFiles(pendingFiles.splice(0));
+		text.value = "";
+		send({ type: "message", messageId, text: body, attachments: uploads });
+	});
+
+	text.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" && !event.shiftKey) {
+			event.preventDefault();
+			form.requestSubmit();
+		}
+	});
+
+	document.getElementById("attach").addEventListener("click", () => fileInput.click());
+	fileInput.addEventListener("change", () => {
+		for (const file of fileInput.files ?? []) pendingFiles.push(file);
+		fileInput.value = "";
+		addBubble("bot", `attached: ${pendingFiles.map((file) => file.name).join(", ")}`);
+	});
+	document.getElementById("status").addEventListener("click", () => send({ type: "status" }));
+	document.getElementById("new").addEventListener("click", () => send({ type: "new" }));
+	document.getElementById("stop").addEventListener("click", () => send({ type: "stop" }));
+
+	conversationSelect.addEventListener("change", () => {
+		conversation = conversationSelect.value;
+		localStorage.setItem(STORAGE_KEY, conversation);
+		lastSeq = 0;
+		log.replaceChildren();
+		pending = undefined;
+		socket?.close();
+	});
+
+	function send(payload) {
+		if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+	}
+
+	connect();
+</script>
+</body>
+</html>

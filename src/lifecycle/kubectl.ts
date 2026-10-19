@@ -60,9 +60,10 @@ export class KubectlAteControl implements ActorControl {
 		try {
 			await this.call(["suspend", "actor", actor.name, "-a", actor.atespace]);
 		} catch (error) {
-			// Suspending an already-suspended actor is the desired end state.
+			// Suspending an already-suspended or deleted actor is the desired
+			// end state either way.
 			const text = errorText(error);
-			if (text.includes("AlreadyExists") || text.includes("SUSPENDED")) return;
+			if (text.includes("AlreadyExists") || text.includes("SUSPENDED") || text.includes("not found")) return;
 			throw error;
 		}
 	}

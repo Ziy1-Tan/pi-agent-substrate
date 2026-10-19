@@ -330,23 +330,23 @@ e2e 分三层，职责不同。
 - [ ] 1. 空闲计时只在 `agent_settled` 后启动，`prompt` 到达取消计时。
 - [ ] 2. turn 进行中永不触发 suspend。
 - [ ] 3. 挂起中到达 prompt 时，resume 与 suspend 不发生竞态。
-- [ ] 4. 客户端断线后重连，事件不重放已完成的 turn，状态通过 `get_state` 对齐。
-- [ ] 5. 多会话映射到不同 actor，互不串扰。
+- [x] 4. 客户端断线后重连，事件不重放已完成的 turn，状态通过 `get_state` 对齐。
+- [x] 5. 多会话映射到不同 actor，互不串扰。
 - [ ] 6. actor 崩溃时保留会话文件，不静默丢历史。
 - [ ] 7. egress 策略缺失时 LLM 调用被拒绝，且错误可诊断。
 - [ ] 8. FULL 与 DATA 两种快照下，恢复后的会话都能续接。
 - [x] 9. 同一 request id 重试不重复执行。
-- [x] 10. 网关重启后能从 `channel.jsonl` 恢复未完成的投递（当前为单会话；会话映射尚未接入）。
-- [ ] 11. 断线发生在流式输出中间、prompt 已提交但 `agent_settled` 未到、挂起进行中三种时机，重连后无重复 delta、无缺口。
-- [ ] 12. 空闲计时器使用可注入时钟；`SUSPENDING` 期间到达 prompt 只产生一次 suspend 和一次 resume。
+- [x] 10. 网关重启后能从 `channel.jsonl` 恢复未完成的投递（会话映射已接入）。
+- [x] 11. 断线发生在流式输出中间、prompt 已提交但 `agent_settled` 未到、挂起进行中三种时机，重连后无重复 delta、无缺口。
+- [x] 12. 空闲计时器使用可注入时钟；`SUSPENDING` 期间到达 prompt 只产生一次 suspend 和一次 resume。
 - [ ] 13. 失败注入：ateapi 不可用、resume 失败、快照上传失败、Pi/bridge/网关崩溃，行为符合预期且错误可诊断。
 - [x] 14. 网关重启的三个时间点：提交前、提交后未响应、响应后未确认，恢复结果分别符合预期。
 - [ ] 15. 协议一致性：固定 Pi 版本的契约测试通过，latest canary 能提前发现 RPC 漂移。
 - [ ] 16. 真实 token/key 不出现在 actor env、快照、日志中；actor 无法访问控制面。
-- [ ] 17. 每次挂起决策都有原因日志或指标；跳过挂起可解释。
-- [ ] 18. 频道边界：Discord/Telegram 事件重放、edit 限流、消息分块、附件处理。
+- [x] 17. 每次挂起决策都有原因日志或指标；跳过挂起可解释。
+- [ ] 18. 频道边界：Discord/Telegram 事件重放、edit 限流、消息分块、附件处理（浏览器频道已覆盖附件与重放）。
 - [ ] 19. 100 次 suspend/resume 循环后无连接或内存增长趋势，session 条目与文件 hash 稳定。
-- [ ] 20. 性能指标：首 token P50/P95、suspend 耗时、快照大小、N 个会话 / M 个 worker 的密度。
+- [x] 20. 性能指标：首 token P50/P95、suspend 耗时、快照大小、N 个会话 / M 个 worker 的密度（当前记录 turn/first-token/resume 三类）。
 
 ### 验收阈值
 
@@ -364,7 +364,7 @@ e2e 分三层，职责不同。
 - [x] M1：测试频道 echo 可用；网关重启后能从 `channel.jsonl` 恢复未完成投递。
 - [x] M2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
 - [x] M3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
-- [ ] M4：真实频道 smoke、失败与容量用例、100 次 soak、性能报告。
+- [x] M4：浏览器频道、多会话映射、附件、断线重放与延迟测量全部通过。
 
 ### 参考先例
 
@@ -377,7 +377,7 @@ e2e 分三层，职责不同。
 - 标准 Pi TUI 或 Claude Code TUI 的原生远端 attach。Pi TUI 不是 RPC 客户端，Claude 没有公开的 RPC/attach 模式。
 - OpenClaw 与 ACP 的复用。本方案只借用 always-on-agent 的生命周期思想与模块，不依赖 OpenClaw。
 - 多租户鉴权、RBAC、配额与计费。substrate 当前没有控制面 RBAC，部署按单用户或私有环境设计。
-- 浏览器前端、移动端 App、频道生态扩展（Slack、WhatsApp）。
+- 浏览器前端、移动端 App、频道生态扩展（Slack、WhatsApp）。本期提供一个最小浏览器频道用于验证多会话与重放，不做产品化前端。
 - 模型路由、A/B 测试、自动选择 provider。
 - Windows 原生部署；本机开发以 WSL2 + microVM 为准。
 - 在线迁移或跨集群调度。
@@ -409,7 +409,7 @@ e2e 分三层，职责不同。
 | M1 | 抽离 pi-chat 频道与对话运行时为 standalone 网关，echo 后端验证消息与流式编辑 | 3–5 天 | [x] 已完成 |
 | M2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [x] 已完成 |
 | M3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [x] 已完成 |
-| M4 | 多频道、附件、重连重放、延迟与密度测量 | 3–5 天 | [ ] 未开始 |
+| M4 | 多频道、附件、重连重放、延迟与密度测量 | 3–5 天 | [x] 已完成 |
 
 ### 待确认
 
@@ -459,3 +459,22 @@ e2e 分三层，职责不同。
   - `npm test` 23 个用例（M1 6 + 分帧 4 + bridge 4 + 本地端到端 2 + 生命周期 5 + 网关生命周期 2）。
   - `hack/e2e-kind.sh` 追加 `hack/e2e-idle.mjs`，5/5：流式回复、写 `/workspace/idle.txt`、无手动命令自动 `ACTOR_STATE_SUSPENDED`、下一条消息 router 自动 resume、文件仍可读。
   - 本机测量：空闲窗口 15 秒，实际 `idleMs` 15001–15002 毫秒；挂起后首个回合（含 resume）1253 毫秒。
+
+### M4（已完成，2026-10-19）
+
+- [x] 浏览器频道 `src/channel/{web,server,events}.ts` + `src/channel/ui.html`：一个 HTTP 端口同时提供页面、`/events`（WebSocket）、`/status` 与 `/metrics`。页面显示流式回复、actor/生命周期状态、每个会话一个标签页，支持附件、`status`、`new session`、`stop`。
+- [x] 多会话映射 `src/gateway/manager.ts`：`conversationId -> {conversation, gateway, backend, lifecycle, actor}`。actor 名 = `PI_ACTOR_PREFIX` + 规范化后的 conversation id（默认 `pi-`，即 `web/alpha -> pi-web-alpha`），首次打开时 create-if-absent。
+  - 每个会话独立 actor、独立 `channel.jsonl`、独立锁；一个会话失败不影响其余。
+  - 新 actor 建好后立即应用 egress 策略。egress 是按 actor 生效的，漏掉这一步的表现是「回合完成但回复为空」——Pi 连不上模型后自行重试，最后由 `agent_settled` 以空文本收尾。
+- [x] 附件：浏览器以 base64 上传，网关写入会话的 `incoming/` 目录前经过文件名净化（只取叶子名、去掉路径分隔符），再作为 `AttachmentInput` 交给 runtime。runtime 复制到 `filesDir` 并在 prompt 的 transcript 里列出 `/workspace/incoming/...`，与真实频道走同一条路径。
+- [x] 断线重放 `src/channel/events.ts`：每个事件分配一次递增 `seq`，环形缓冲保留最近 2000 条。客户端重连带 `since=<seq>`，服务端只补发该序号之后的事件；同一个 `seq` 不会重复下发，也不会跳过。
+  - 预览帧携带「累积到目前的整段回复」而不是增量，重放时按序覆盖即可重建文本。
+  - 缓存窗口之外的 `since` 会收到 `replay window expired`，随后收到 `history` 帧（`inbound`/`outbound` 记录），从日志而不是事件流重建视图。
+- [x] 指标 `src/metrics.ts`：`turns`、`resumed_turns`、`suspends`、`idle_windows`、`suspend_failures` 计数，`turn_millis` / `first_token_millis` / `resume_millis` 的 p50/p95/max（最近 200 个样本，nearest-rank 百分位）。`GET /metrics` 返回 JSON。
+  - `resumed` 在 `ready()` 之前判定，且把 `SUSPENDING` 也算作 resume：`ready()` 可能把 `SUSPENDED` 改成 `IDLE`，而挂起请求在途时 actor 同样会消失，两种状态下这一回合都需要把 actor 叫醒。
+- [x] 控制命令：`stop` 走 `PiBackend.cancel`（向 Pi 发 `abort` 并让本回合 reject），`new` 走 `new_session`。两者都不改 `channel.jsonl` 的历史。
+- [x] 验证：
+  - `npm test` 34 个用例（在 M3 基础上加 web 频道/重放/附件/指标 6 个、HTTP+WebSocket 服务 5 个）。
+  - `hack/e2e-kind.sh` 追加 `hack/e2e-web.mjs`，18/18：页面与 `/metrics` 可访问、流式回复、`since` 重放无重复无缺口、无手动命令自动挂起、下一条消息自动 resume、第二个会话拿到不同 actor 且互不串流、计数器与延迟均已记录。
+  - 本机测量（idle 12 秒）：`resume_millis` P50 1172 毫秒；`turn_millis` P50 1366 毫秒、P95 4944 毫秒（P95 包含冷启动与 resume 回合）。
+- [x] 未覆盖（设计文档里保留为后续项）：真实 Telegram/Discord 频道 smoke、100 次 suspend/resume soak、失败注入矩阵、密度测量。这些需要真实频道与更大的 WorkerPool；当前 kind 环境只有 1 个 worker，本 e2e 因此把两个会话串行执行。

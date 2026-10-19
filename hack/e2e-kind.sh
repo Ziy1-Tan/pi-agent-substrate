@@ -16,6 +16,8 @@
 #   ATESPACE          atespace (default: pi-agents)
 #   ROUTER_URL        router base URL as seen from this machine (default: http://127.0.0.1:8000)
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
+#   WEB_PORT          port for the browser-channel e2e (default: 8899)
+#   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
 #   ONLY              "deploy" to skip the e2e, "e2e" to skip the deploy
 set -o errexit -o nounset -o pipefail
 
@@ -30,6 +32,8 @@ ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-actor}"
 ACTOR="${ACTOR:-pi-actor-1}"
 ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:8000}"
 IDLE_SECONDS="${IDLE_SECONDS:-15}"
+WEB_PORT="${WEB_PORT:-8899}"
+CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -121,4 +125,11 @@ if [[ "${ONLY}" != "deploy" ]]; then
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     PI_IDLE_SECONDS="${IDLE_SECONDS}" \
     node hack/e2e-idle.mjs
+
+  echo "==> running the web channel e2e"
+  PI_ATESPACE="${ATESPACE}" PI_ROUTER_URL="${ROUTER_URL}" \
+    KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
+    PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_WEB_PORT="${WEB_PORT}" \
+    PI_CONVERSATIONS="${CONVERSATIONS}" \
+    node hack/e2e-web.mjs
 fi

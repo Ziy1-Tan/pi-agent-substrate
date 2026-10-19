@@ -44,6 +44,13 @@ export interface PiBackendOptions {
 	resultTtlMs?: number;
 }
 
+/** A bridge result or a recovered one, read into the shape a turn resolves with. */
+function turnOutcome(record: Record<string, unknown>): AgentResponse {
+	const text = typeof record.text === "string" ? record.text : "";
+	const error = typeof record.error === "string" ? record.error : undefined;
+	return error === undefined ? { text } : { text, error };
+}
+
 /**
  * AgentBackend over an actor that speaks Pi RPC plus the bridge extensions.
  *
@@ -231,18 +238,14 @@ export class PiBackend implements AgentBackend {
 		}
 		if (record.type === "bridge_result") {
 			const requestId = typeof record.requestId === "string" ? record.requestId : this.active?.requestId;
-			if (requestId) {
-				const text = typeof record.text === "string" ? record.text : "";
-				const error = typeof record.error === "string" ? record.error : undefined;
-				this.settle(requestId, text, error);
-			}
+			if (requestId) this.settle(requestId, turnOutcome(record));
 			return;
 		}
 		if (record.type === "bridge_result_reply") {
 			// A recovery lookup, not a turn: only a found result settles it.
-			const result = record.result as { requestId?: string; text?: string; error?: string } | undefined;
-			if (record.found === true && typeof result?.text === "string") {
-				this.settle(result.requestId ?? this.active?.requestId ?? "", result.text, result.error);
+			const result = record.result as Record<string, unknown> | undefined;
+			if (record.found === true && typeof result?.requestId === "string") {
+				this.settle(result.requestId, turnOutcome(result));
 			}
 			return;
 		}
@@ -251,7 +254,11 @@ export class PiBackend implements AgentBackend {
 			// fallback covers a bridge whose result record did not survive, and
 			// an empty reply is the only thing left to report.
 			const turn = this.active;
-			if (turn) this.settle(turn.requestId, turn.text, turn.text.length === 0 ? "the turn ended without a reply" : undefined);
+			if (!turn) return;
+			this.settle(
+				turn.requestId,
+				turn.text.length === 0 ? { text: "", error: "the turn ended without a reply" } : { text: turn.text },
+			);
 			return;
 		}
 		if (record.type === "bridge_exit") {
@@ -276,15 +283,14 @@ export class PiBackend implements AgentBackend {
 		}
 	}
 
-	private settle(requestId: string, text: string, error?: string): void {
+	private settle(requestId: string, outcome: AgentResponse): void {
 		const turn = this.active;
 		if (!turn || turn.requestId !== requestId) return;
 		if (turn.timer) clearTimeout(turn.timer);
 		this.active = undefined;
 		this.sent.delete(requestId);
-		const response: AgentResponse = error === undefined ? { text } : { text, error };
-		this.settled.set(requestId, { response, at: Date.now() });
-		turn.resolve(response);
+		this.settled.set(requestId, { response: outcome, at: Date.now() });
+		turn.resolve(outcome);
 	}
 
 	private failTurn(requestId: string, error: Error): void {
@@ -294,5 +300,4 @@ export class PiBackend implements AgentBackend {
 		this.active = undefined;
 		turn.reject(error);
 	}
-
 }

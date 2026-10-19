@@ -100,16 +100,30 @@ if [[ -z "${ACTOR_DIGEST}" ]]; then
 fi
 ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 
-PROVIDER_URL="$(node -e '
-  const fs = require("node:fs");
-  const all = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const baseUrl = all.providers?.[process.argv[2]]?.baseUrl;
-  if (!baseUrl) process.exit(1);
-  const url = new URL(baseUrl);
-  process.stdout.write(JSON.stringify({ host: url.hostname, port: url.port || (url.protocol === "https:" ? "443" : "80") }));
-' "${PI_MODELS_JSON}" "${PROVIDER}")"
-PROVIDER_HOST="${PROVIDER_HOST:-$(printf '%s' "${PROVIDER_URL}" | node -e 'let b="";process.stdin.on("data",c=>b+=c).on("end",()=>process.stdout.write(JSON.parse(b).host))')}"
-PROVIDER_PORT="${PROVIDER_PORT:-$(printf '%s' "${PROVIDER_URL}" | node -e 'let b="";process.stdin.on("data",c=>b+=c).on("end",()=>process.stdout.write(JSON.parse(b).port))')}"
+# Reads one field of the selected provider. Keeping the key out of the actor
+# means reading it exactly where it is written to the Secret.
+provider_field() {
+  node -e '
+    const fs = require("node:fs");
+    const [file, name, field] = process.argv.slice(1);
+    const provider = JSON.parse(fs.readFileSync(file, "utf8")).providers?.[name];
+    const value = provider?.[field];
+    if (!value) {
+      console.error(`provider ${name} has no ${field} in ${file}`);
+      process.exit(1);
+    }
+    process.stdout.write(String(value));
+  ' "${PI_MODELS_JSON}" "${PROVIDER}" "$1"
+}
+
+# `read` needs a terminating newline: without one it returns non-zero and
+# errexit would end the script here.
+read -r inferred_host inferred_port < <(node -e '
+  const url = new URL(process.argv[1]);
+  process.stdout.write(`${url.hostname} ${url.port || (url.protocol === "https:" ? 443 : 80)}\n`);
+' "$(provider_field baseUrl)")
+PROVIDER_HOST="${PROVIDER_HOST:-${inferred_host}}"
+PROVIDER_PORT="${PROVIDER_PORT:-${inferred_port}}"
 CREDENTIAL_URI="${CREDENTIAL_URI:-ate-secret://k8s.io/default/${ATESPACE}/${SECRET_NAME}/api-key}"
 RENDERED_POLICY=bin/egress-policy.yaml
 echo "==> rendering the egress policy for ${PROVIDER_HOST}"
@@ -120,16 +134,7 @@ sed -e "s#\${PROVIDER_HOST}#${PROVIDER_HOST}#" \
 
 echo "==> creating the provider secret"
 "${kube[@]}" -n "${ATESPACE}" create secret generic "${SECRET_NAME}" \
-  --from-literal=api-key="$(node -e '
-    const fs = require("node:fs");
-    const all = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    const key = all.providers?.[process.argv[2]]?.apiKey;
-    if (!key) {
-      console.error(`provider ${process.argv[2]} has no apiKey in ${process.argv[1]}`);
-      process.exit(1);
-    }
-    process.stdout.write(key);
-  ' "${PI_MODELS_JSON}" "${PROVIDER}")" \
+  --from-literal=api-key="$(provider_field apiKey)" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -
 
 # The credential provider is default-deny: without this the gateway cannot
@@ -162,11 +167,10 @@ fi
 echo "==> creating the actor template (${PROVIDER}/${PI_MODEL})"
 MODELS_JSON="$(node -e '
   const fs = require("node:fs");
-  const all = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const name = process.argv[2];
-  const provider = all.providers?.[name];
+  const [file, name] = process.argv.slice(1);
+  const provider = JSON.parse(fs.readFileSync(file, "utf8")).providers?.[name];
   if (!provider) {
-    console.error(`provider ${name} not found in ${process.argv[1]}`);
+    console.error(`provider ${name} not found in ${file}`);
     process.exit(1);
   }
   // Only the selected provider is copied into the sandbox; the other entries

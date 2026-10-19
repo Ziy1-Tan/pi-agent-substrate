@@ -23,10 +23,6 @@ export function isRpcResponse(value: unknown): value is { type: "response"; comm
 	return isObject(value) && value.type === "response" && typeof value.command === "string";
 }
 
-export function isMessageEnd(value: unknown): boolean {
-	return isObject(value) && value.type === "message_end";
-}
-
 export function isTextDelta(value: unknown): value is { assistantMessageEvent: { delta: string } } {
 	if (!isObject(value) || value.type !== "message_update") return false;
 	const event = value.assistantMessageEvent;
@@ -37,49 +33,46 @@ export function isAgentSettled(value: unknown): boolean {
 	return isObject(value) && value.type === "agent_settled";
 }
 
-/** True for the `message_end` of an assistant message, successful or not. */
-export function isAssistantMessageEnd(value: unknown): boolean {
-	if (!isMessageEnd(value)) return false;
-	const message = (value as Record<string, unknown>).message;
-	return isObject(message) && message.role === "assistant";
+/** The `message_end` of an assistant message, successful or not. */
+function assistantMessage(value: unknown): Record<string, any> | undefined {
+	if (!isObject(value) || value.type !== "message_end") return undefined;
+	const message = value.message;
+	return isObject(message) && message.role === "assistant" ? message : undefined;
 }
 
-/** The text of a completed assistant message, or undefined for any other record. */
-export function assistantText(value: unknown): string | undefined {
-	if (!isMessageEnd(value)) return undefined;
-	const message = (value as Record<string, unknown>).message;
-	if (!isObject(message) || message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
-	return message.content
-		.filter((block): block is { text: string } => isObject(block) && typeof block.text === "string")
-		.map((block) => block.text)
-		.join("");
+export interface AssistantOutcome {
+	/** The text of the finished message; absent when it produced none. */
+	text?: string;
+	/** Why the turn failed; absent when the message ended normally. */
+	error?: string;
 }
 
 /**
- * Why the assistant turn failed, or undefined when it ended normally.
- *
- * Pi reports provider failures as an assistant message with `stopReason:
- * "error"` carrying the provider's own text in `errorMessage`. Without this,
- * a failed turn looks like a turn that produced nothing: the gateway records
- * an empty reply and the user sees silence.
+ * The outcome of a finished assistant message, or undefined for any other
+ * record. Text and failure come from the same message: Pi reports a provider
+ * error as an assistant message with `stopReason: "error"` and the provider's
+ * own text in `errorMessage`, so reading one without the other makes a failed
+ * turn indistinguishable from one that produced no text.
  */
-export function assistantError(value: unknown): string | undefined {
-	if (!isMessageEnd(value)) return undefined;
-	const message = (value as Record<string, unknown>).message;
-	if (!isObject(message) || message.role !== "assistant") return undefined;
-	const stopReason = message.stopReason;
-	if (stopReason !== "error") return undefined;
-	const text = message.errorMessage;
-	return typeof text === "string" && text.length > 0 ? text : "the model request failed";
+export function assistantOutcome(value: unknown): AssistantOutcome | undefined {
+	const message = assistantMessage(value);
+	if (!message) return undefined;
+	const text = Array.isArray(message.content)
+		? message.content
+				.filter((block: unknown): block is { text: string } => isObject(block) && typeof block.text === "string")
+				.map((block: { text: string }) => block.text)
+				.join("")
+		: "";
+	const failure = typeof message.errorMessage === "string" ? message.errorMessage : "";
+	const error = message.stopReason === "error" ? failure || "the model request failed" : undefined;
+	return error === undefined ? { text } : { text: "", error };
 }
 
 /**
- * The final error of an exhausted retry loop, or undefined while retrying or
- * after a retry that succeeded.
- *
- * `auto_retry_end` with `success: false` is Pi saying it will not try again.
- * It carries the last provider error, which is more specific than the final
- * assistant message when the provider never answered at all.
+ * The final error of an exhausted retry loop. `auto_retry_end` with
+ * `success: false` is Pi saying it will not try again, and its `finalError` is
+ * more specific than the last assistant message when the provider never
+ * answered at all.
  */
 export function retryFailure(value: unknown): string | undefined {
 	if (!isObject(value) || value.type !== "auto_retry_end" || value.success !== false) return undefined;

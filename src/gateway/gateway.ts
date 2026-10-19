@@ -176,16 +176,18 @@ export class Gateway {
 		// turn that failed after `turnStarted` would otherwise leave the actor
 		// ACTIVE for good, because the idle timer only arms from GRACE.
 		try {
-			await this.runStartedTurn(job, state, resumed);
+			await this.runStartedTurn(runtime, job, state, resumed);
 		} finally {
 			this.options.lifecycle?.turnSettled();
 		}
 	}
 
-	private async runStartedTurn(job: PendingJob, state: JobDeliveryState, resumed: boolean): Promise<void> {
-		const runtime = this.runtime;
-		if (!runtime) throw new Error("gateway is not running");
-
+	private async runStartedTurn(
+		runtime: ConversationRuntime,
+		job: PendingJob,
+		state: JobDeliveryState,
+		resumed: boolean,
+	): Promise<void> {
 		// A retry after a crash keeps the original request id.
 		const requestId = state.dispatched.at(-1)?.requestId ?? job.jobId;
 		await this.options.hooks?.beforeSubmit?.();
@@ -222,24 +224,18 @@ export class Gateway {
 			// like a successful silent answer.
 			await runtime.recordJobFailed(job, response.error);
 			await this.options.channel.sendError?.({ deliveryId: requestId, text: response.error });
-			this.options.onTurn?.({
-				requestId,
-				turnMillis: Date.now() - startedAt,
-				firstTokenMillis,
-				resumed,
+		} else {
+			const remoteMessageId = await this.options.channel.send({
+				deliveryId: requestId,
+				text: response.text,
+				replyToMessageId: dispatch.triggerMessageId,
 			});
-			return;
-		}
-		const remoteMessageId = await this.options.channel.send({
-			deliveryId: requestId,
-			text: response.text,
-			replyToMessageId: dispatch.triggerMessageId,
-		});
-		await this.options.hooks?.afterChannelSend?.();
+			await this.options.hooks?.afterChannelSend?.();
 
-		const outbound = await runtime.recordOutbound(response.text, remoteMessageId);
-		await this.options.hooks?.afterOutbound?.();
-		await runtime.recordJobCompleted(outbound?.recordId);
+			const outbound = await runtime.recordOutbound(response.text, remoteMessageId);
+			await this.options.hooks?.afterOutbound?.();
+			await runtime.recordJobCompleted(outbound?.recordId);
+		}
 		this.options.onTurn?.({
 			requestId,
 			turnMillis: Date.now() - startedAt,

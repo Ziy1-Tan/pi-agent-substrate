@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { parseRecord } from "../protocol/lines.js";
-import { isAgentSettled, type RpcCommand } from "../protocol/rpc.js";
+import type { RpcCommand } from "../protocol/rpc.js";
 import { PiActivity, PiProcess } from "./pi-process.js";
 
 export interface BridgeOptions {
@@ -110,18 +110,13 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 		onStart: () => activity.resetStream(),
 		onEvent: (event) => {
 			activity.observe(event);
-			const settling = isAgentSettled(event) && currentRequestId !== undefined;
-			if (settling) {
-				// The authoritative result goes out before Pi's own event: the
-				// gateway settles on the first record it sees, and a bare
-				// `agent_settled` would turn a provider failure into an empty
-				// reply. A failed turn and an empty one must not look alike.
-				const error = activity.settledError(event);
-				const result: TurnResult =
-					error === undefined
-						? { requestId: currentRequestId as string, text: activity.settledText(event) ?? "" }
-						: { requestId: currentRequestId as string, text: "", error };
-				results.set(result.requestId, result);
+			// The authoritative result goes out before Pi's own event: the
+			// gateway settles on the first record it sees, and a bare
+			// `agent_settled` would turn a provider failure into an empty reply.
+			const settled = activity.settled(event);
+			if (settled && currentRequestId !== undefined) {
+				const result: TurnResult = { requestId: currentRequestId, ...settled };
+				results.set(currentRequestId, result);
 				broadcast({ type: "bridge_result", ...result });
 				currentRequestId = undefined;
 			}

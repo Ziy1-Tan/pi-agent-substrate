@@ -2,10 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { LineFramer, encodeRecord } from "../protocol/lines.js";
 import {
-	assistantError,
-	assistantText,
+	assistantOutcome,
 	isAgentSettled,
-	isAssistantMessageEnd,
 	isRpcResponse,
 	isTextDelta,
 	retryFailure,
@@ -135,10 +133,10 @@ export class PiActivity {
 		if (isTextDelta(event)) this.text += event.assistantMessageEvent.delta;
 		// Each finished assistant message supersedes the outcome before it: a
 		// retry that eventually returns text clears the failure that started it.
-		if (isAssistantMessageEnd(event)) {
-			const completed = assistantText(event);
-			if (completed !== undefined) this.lastAssistantText = completed;
-			this.failure = assistantError(event);
+		const outcome = assistantOutcome(event);
+		if (outcome) {
+			if (outcome.text !== undefined) this.lastAssistantText = outcome.text;
+			this.failure = outcome.error;
 		}
 		const exhausted = retryFailure(event);
 		if (exhausted !== undefined) this.failure = exhausted;
@@ -153,17 +151,12 @@ export class PiActivity {
 		}
 	}
 
-	/** The finished assistant message, or undefined while it is incomplete. */
-	settledText(event: unknown): string | undefined {
+	/** The turn's outcome once `agent_settled` arrives; undefined before that. */
+	settled(event: unknown): { text: string; error?: string } | undefined {
 		if (!isAgentSettled(event)) return undefined;
-		if (this.lastAssistantText !== undefined) return this.lastAssistantText;
-		return this.text;
-	}
-
-	/** Why the turn failed, once `agent_settled` arrives; otherwise undefined. */
-	settledError(event: unknown): string | undefined {
-		if (!isAgentSettled(event)) return undefined;
-		return this.failure;
+		return this.failure === undefined
+			? { text: this.lastAssistantText ?? this.text }
+			: { text: "", error: this.failure };
 	}
 
 	snapshot(): {

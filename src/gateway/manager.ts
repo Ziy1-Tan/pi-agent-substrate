@@ -1,6 +1,6 @@
 import { PiBackend } from "../backend/pi.js";
 import type { ResolvedConversation } from "../../third_party/pi-chat/types.js";
-import type { AgentBackend, InboundMessageInput } from "./types.js";
+import type { AgentBackend, Channel, InboundMessageInput } from "./types.js";
 import { createConversation } from "./conversations.js";
 import { Gateway } from "./gateway.js";
 import { IdleLifecycle } from "../lifecycle/idle.js";
@@ -32,13 +32,21 @@ export interface ManagerOptions {
 	provision?: (actor: ActorRef) => Promise<void>;
 	/** Replaces the actor backend; tests use it to run without a cluster. */
 	createBackend?: (conversation: ResolvedConversation) => AgentBackend;
+	/**
+	 * Supplies the channel a turn's reply goes to. Without it replies are only
+	 * recorded as events on the conversation's WebSocket.
+	 */
+	createChannel?: (conversation: ResolvedConversation) => Channel | undefined;
 	log?: (message: string) => void;
 }
 
 export interface ManagedConversation {
 	conversation: ResolvedConversation;
 	gateway: Gateway;
+	/** Sequenced event log for browser clients, always present. */
 	channel: WebChannel;
+	/** Where the settled reply is delivered: the web log, Telegram, or a pipe. */
+	outbound: Channel;
 	lifecycle: IdleLifecycle;
 	actor: ActorRef;
 }
@@ -136,6 +144,7 @@ export class GatewayManager {
 			conversationId: spec.conversationId,
 			filesDir: conversation.filesDir,
 		});
+		const outbound = this.options.createChannel?.(conversation) ?? channel;
 		const transport = new WebSocketTransport({
 			url: this.options.actorUrl,
 			targetActor: `${actor.atespace}/${actor.name}`,
@@ -159,7 +168,7 @@ export class GatewayManager {
 
 		const gateway = new Gateway({
 			conversation,
-			channel,
+			channel: outbound,
 			backend,
 			lifecycle,
 			onTurn: (report) => {
@@ -178,7 +187,7 @@ export class GatewayManager {
 		});
 		await gateway.start();
 
-		const entry: ManagedConversation = { conversation, gateway, channel, lifecycle, actor };
+		const entry: ManagedConversation = { conversation, gateway, channel, outbound, lifecycle, actor };
 		this.entries.set(spec.conversationId, entry);
 		log(`opened ${spec.conversationId} on ${actor.atespace}/${actor.name}`);
 		return entry;

@@ -12,8 +12,7 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json && cp src/channel/ui.html dist/src/channel/ui.html",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "npm run build && NODE_ENV=test node --test dist/test/m1.test.js dist/test/m2-protocol.test.js dist/test/m2-bridge.test.js dist/test/m2-e2e.test.js dist/test/m3-idle.test.js dist/test/m3-gateway.test.js dist/test/m4-web.test.js dist/test/m4-server.test.js",
-		"demo:echo": "npm run build && NODE_ENV=test node dist/test/demo/echo-demo.js"
+		"test": "npm run build && NODE_ENV=test node --test dist/test/m1.test.js dist/test/m2-protocol.test.js dist/test/m2-bridge.test.js dist/test/m2-e2e.test.js dist/test/m3-idle.test.js dist/test/m3-gateway.test.js dist/test/m3-transport.test.js dist/test/m4-web.test.js dist/test/m4-server.test.js dist/test/m5-channels.test.js dist/test/m6-entry.test.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",

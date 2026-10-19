@@ -120,12 +120,6 @@ if [[ "${ONLY}" != "deploy" ]]; then
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     node hack/e2e-kind.mjs
 
-  echo "==> running the automatic suspend/resume e2e"
-  PI_ATESPACE="${ATESPACE}" PI_ACTOR="${ACTOR}" PI_ROUTER_URL="${ROUTER_URL}" \
-    KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
-    PI_IDLE_SECONDS="${IDLE_SECONDS}" \
-    node hack/e2e-idle.mjs
-
   echo "==> running the web channel e2e"
   PI_ATESPACE="${ATESPACE}" PI_ROUTER_URL="${ROUTER_URL}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \

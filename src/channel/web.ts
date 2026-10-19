@@ -1,17 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
-
 import type { AttachmentInput } from "../../third_party/pi-chat/types.js";
 import type { Channel, OutboundDelivery } from "../gateway/types.js";
 import { EventRing, type Sequenced } from "./events.js";
+import { saveUploads, type UploadInput } from "./uploads.js";
 
-/** One uploaded file as the browser sends it. */
-export interface UploadInput {
-	name: string;
-	/** Base64, without a data-URL prefix. */
-	data: string;
-	mimeType?: string;
-}
+export type { UploadInput };
 
 export interface WebChannelEvent {
 	conversationId: string;
@@ -42,9 +34,6 @@ export interface WebChannelOptions {
 export class WebChannel implements Channel {
 	readonly conversationId: string;
 	readonly events = new EventRing<WebChannelEvent>(2_000);
-
-	/** Keep uploads small; the gateway is not a file service. */
-	static readonly maxUploadBytes = 8 * 1024 * 1024;
 
 	private readonly filesDir: string;
 	private readonly listeners = new Set<(event: Sequenced<WebChannelEvent>) => void>();
@@ -109,33 +98,11 @@ export class WebChannel implements Channel {
 
 	/** Writes base64 uploads under the conversation's files directory. */
 	async saveUploads(messageId: string, uploads: UploadInput[] | undefined): Promise<AttachmentInput[]> {
-		if (!uploads?.length) return [];
-		await mkdir(this.filesDir, { recursive: true });
-		const saved: AttachmentInput[] = [];
-		for (const [index, upload] of uploads.entries()) {
-			const data = Buffer.from(upload.data, "base64");
-			if (data.byteLength > WebChannel.maxUploadBytes) {
-				throw new Error(`attachment ${upload.name} exceeds ${WebChannel.maxUploadBytes} bytes`);
-			}
-			// A browser can send any name; keep only the leaf so an upload cannot
-			// escape the conversation directory.
-			const name = safeName(upload.name) || `upload-${index + 1}`;
-			const path = join(this.filesDir, `${Date.now()}-${messageId}-${index + 1}-${name}`);
-			await writeFile(path, data);
-			saved.push({ path, name, mimeType: upload.mimeType });
-		}
-		return saved;
+		return saveUploads(this.filesDir, messageId, uploads);
 	}
 
 	private record(event: Omit<WebChannelEvent, "conversationId">): void {
 		const sequenced = this.events.record({ conversationId: this.conversationId, ...event });
 		for (const listener of this.listeners) listener(sequenced);
 	}
-}
-
-function safeName(value: string): string {
-	const leaf = basename(value || "");
-	const stem = leaf.slice(0, Math.max(0, leaf.length - extname(leaf).length));
-	const clean = `${stem}${extname(leaf)}`.replace(/[^a-zA-Z0-9._-]+/g, "_");
-	return clean.startsWith(".") ? `file${clean}` : clean;
 }

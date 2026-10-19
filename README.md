@@ -4,10 +4,9 @@ Always-on Pi agents on [Agent Substrate](https://github.com/agent-substrate/subs
 a standalone gateway keeps the chat presence, while each conversation's
 cognition runs in a suspendable Substrate actor.
 
-This repository is at milestone **M4**. The gateway, the conversation log, the
-restart recovery path, the actor bridge, the idle lifecycle, and the browser
-channel all run and are tested on a workstation; the actor bridge, automatic
-suspend/resume, and the browser channel also run on a kind cluster.
+The gateway is reachable two ways: `curl` against `POST /messages`, or a
+Telegram bot that turns every chat into its own conversation. Both go through
+the same conversation log, actor mapping, and idle lifecycle.
 
 ## Design
 
@@ -20,9 +19,10 @@ M1 extracts the channel and conversation runtime from pi-chat into a standalone
 gateway. M2 adds the actor side: a bridge that exposes `pi --mode rpc` as a
 WebSocket inside a Substrate actor, and a gateway backend that drives it. M3
 adds the idle lifecycle: the gateway suspends an actor that has no turn in
-flight and the router resumes it on the next message. M4 adds the browser
-channel, one actor per conversation, attachments, reconnect replay, and
-latency metrics.
+flight and the router resumes it on the next message. M4 adds one actor per
+conversation, attachments, reconnect replay, and latency metrics. The entry
+points are a browser page, `curl`, and Telegram; an incoming message is the
+only thing that wakes an actor.
 
 | Exit criterion | Where it is verified |
 |---|---|
@@ -31,8 +31,10 @@ latency metrics.
 | The bridge forwards prompts to real `pi` and streams its reply | `test/m2-bridge.test.ts` |
 | A channel message reaches `pi` through the gateway and streams back | `test/m2-e2e.test.ts` |
 | Manually suspending the actor resumes on the next message, session and files intact | `hack/e2e-kind.sh` |
-| An idle actor suspends with no command, and the next message resumes it | `test/m3-idle.test.ts`, `hack/e2e-idle.mjs` |
+| An idle actor suspends with no command, and the next message resumes it | `test/m3-idle.test.ts`, `hack/e2e-web.mjs` |
 | A browser turn streams, and a reconnect with `since` replays only what was missed | `test/m4-server.test.ts`, `hack/e2e-web.mjs` |
+| `curl` gets the settled reply in the HTTP response | `test/m6-entry.test.ts`, `hack/e2e-web.mjs` |
+| A Telegram chat becomes a conversation and the reply lands in the chat | `test/m5-channels.test.ts`, `test/m6-entry.test.ts` |
 | Two conversations map to two actors and two logs | `test/m4-web.test.ts`, `hack/e2e-web.mjs` |
 | An upload survives the trip to `/workspace/incoming` | `test/m4-web.test.ts` |
 
@@ -50,47 +52,37 @@ OpenAI-compatible server; no API key or cluster is needed.
 `npm test` typechecks, builds, and runs the acceptance tests. `PI_E2E_LOG=1`
 prints the actor and transport logs.
 
-To try the echo gateway by hand:
-
-```sh
-npm run demo:echo
-```
-
-The demo prints the `channel.jsonl` path and echoes each line you type.
-
-To drive a real actor from this machine, forward the router and run the gateway
-entry point. Each stdin line is one message; replies are framed on stdout.
+To drive a real actor from this machine, forward the router and start the
+gateway.
 
 ```sh
 kubectl -n ate-system port-forward svc/atenet-router 8000:80 &
-PI_ACTOR_URL=ws://127.0.0.1:8000 PI_ACTOR=pi-agents/pi-actor-1 \
-  PI_IDLE_SECONDS=60 node dist/src/bin/gateway.js
+PI_ACTOR_URL=ws://127.0.0.1:8000 PI_IDLE_SECONDS=60 \
+  node dist/src/bin/web.js
 ```
 
-`PI_IDLE_SECONDS=0` disables the idle lifecycle. `PI_ACTOR_TEMPLATE` and the
-`KUBECTL_ATE` / `KUBE_CONTEXT` variables configure actor creation.
+`PI_IDLE_SECONDS=0` disables the idle lifecycle. `PI_ACTOR_TEMPLATE`,
+`PI_EGRESS_POLICY`, and `KUBECTL_ATE` / `KUBE_CONTEXT` configure actor creation.
 
 ## Layout
 
 ```
 src/gateway/          Gateway state machine, conversation layout, multi-conversation manager
 src/lifecycle/        Idle-suspend state machine and the kubectl-ate control
-src/channel/          Browser channel, HTTP/WebSocket server, replay ring, page
+src/channel/          Browser, curl, and Telegram channels; HTTP/WebSocket server; replay ring
 src/backend/echo.ts   Deterministic, idempotent echo backend
 src/backend/pi.ts     Backend over the actor bridge (idempotent per request id)
 src/bridge/           Actor-side bridge: WebSocket <-> `pi --mode rpc`
 src/protocol/         LF framing and the pinned RPC subset
 src/transport/        WebSocket actor transport with reconnect
 src/metrics.ts        Counters and p50/p95 timings for the last 200 turns
-src/bin/gateway.ts    Local gateway entry point, driven over stdin/stdout
-src/bin/web.ts        Browser gateway: page, /events, /metrics
+src/bin/web.ts        Gateway entry point: page, /events, POST /messages, Telegram poll
 images/actor/         Actor image: Node + pinned Pi + bridge
 images/mock-llm/      OpenAI-compatible mock for the clustered e2e
 deploy/test/          WorkerPool, ActorTemplate, mock LLM, egress policy
 hack/e2e-kind.sh      Build, deploy, and run the clustered e2e
-hack/e2e-idle.mjs     Clustered automatic suspend/resume e2e
-hack/e2e-web.mjs      Clustered browser-channel e2e
-test/                 Acceptance tests, M1 through M4
+hack/e2e-web.mjs      Clustered curl + browser + suspend/resume e2e
+test/                 Acceptance tests, M1 through M6
 test/support/         Test channel and test conversation layout (test builds only)
 third_party/pi-chat   Vendored conversation runtime, see its README
 ```
@@ -110,31 +102,48 @@ LLM`, then suspends the actor through the control plane and prompts again. It
 asserts that the router resumes the actor, that a file written before the
 suspend is still readable, and that the session continues rather than restarting.
 
-`hack/e2e-kind.sh` also runs `hack/e2e-idle.mjs`: the gateway reports turn
-boundaries to the idle lifecycle, waits out `IDLE_SECONDS` (default 15) with no
-manual command, observes `ACTOR_STATE_SUSPENDED`, then prompts again. It asserts
-that the router resumed the actor, that the file written before the suspend is
-still there, and prints the resumed turn's latency.
-
-The last scenario, `hack/e2e-web.mjs`, starts the browser gateway against the
-same port-forward. It streams a reply over `/events`, drops the socket
-mid-stream, reconnects with `since`, and asserts that replay starts right after
-the last seen frame with no duplicate. It then waits for the idle window to
-suspend the actor, prompts again to prove the resume, opens a second
+`hack/e2e-kind.sh` also runs `hack/e2e-web.mjs`, which starts the gateway
+against the same port-forward. It answers a `POST /messages` request with the
+settled reply, streams a browser reply over `/events`, drops the socket
+mid-stream and reconnects with `since` to prove replay starts right after the
+last seen frame with no duplicate. It then waits out `IDLE_SECONDS` for an
+automatic suspend, prompts again to prove the resume, opens a second
 conversation to show it gets its own actor and log, and reads `/metrics` for
 the turn and resume latencies.
 
-## Browser channel
+## Entry points
+
+One process, three ways in. A conversation id is `<account>/<channel>`, and
+each one owns an actor and a `channel.jsonl`.
+
+**curl**: one request, one turn, the settled reply in the response.
 
 ```sh
-KUBECTL_ATE=kubectl-ate KUBE_CONTEXT=kind-kind \
-PI_ACTOR_URL=ws://127.0.0.1:8000 PI_CONVERSATIONS=local/chat \
+curl -s localhost:8788/messages \
+  -H 'content-type: application/json' \
+  -d '{"conversation":"local/chat","text":"say hello"}'
+# {"conversation":"local/chat","messageId":"...","text":"..."}
+```
+
+Attachments are base64 in an `attachments` array, the same shape the browser
+sends. A rejected turn is a non-2xx status with `{"error": "..."}`.
+
+**Telegram**: set `PI_TELEGRAM_TOKEN` and the bot long-polls for messages. Each
+chat maps to `telegram/<chat id>`, so a group and a DM never share an actor.
+A reply streams as edits of one message, and a reply longer than 4096
+characters arrives as several messages. `PI_TELEGRAM_CHATS` restricts which
+chats are answered; an empty list answers any chat that messages the bot.
+The bot skips the update backlog on startup, so a restart does not answer
+messages from an outage.
+
+```sh
+PI_TELEGRAM_TOKEN=123:abc PI_TELEGRAM_CHATS=42 \
   node dist/src/bin/web.js
 ```
 
-Then open `http://127.0.0.1:8788/`. Each stdin-free conversation tab talks to
-its own actor; `PI_CONVERSATIONS` only pre-populates the picker, and any
-`account/channel` id opens on first use.
+**Browser**: open `http://127.0.0.1:8788/`. The picker lists
+`PI_CONVERSATIONS` and any conversation opened by another entry point; an
+unlisted `account/channel` id opens on first use.
 
 - `GET /events?conversation=<id>&since=<seq>` upgrades to a WebSocket.
 - Client commands: `message` (with optional `attachments` as base64), `stop`,
@@ -194,6 +203,12 @@ never issued mid-turn, because substrate's suspend cancels in-flight work
 instead of draining it. The gateway reports boundaries only after
 `job_completed`, so a crash between the outbound record and the completion does
 not start the idle clock.
+
+Nothing reconnects on its own. Connecting to the bridge wakes the actor, so an
+automatic reconnect after a suspend would immediately undo the idle window and
+the actor would never stay asleep. The next turn is the only thing that opens
+the connection; `PiBackend` drops its settled-result cache on disconnect,
+because those results lived in the bridge process that the suspend removed.
 
 `KubectlAteControl` (`src/lifecycle/kubectl.ts`) is the control plane client.
 The local gateway takes the actor ref from `PI_ACTOR`; `ensure()` treats an

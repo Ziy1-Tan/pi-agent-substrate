@@ -6,8 +6,6 @@ import type { ActorTransport } from "../backend/pi.js";
 const CONNECT_TIMEOUT_MS = 10_000;
 /** No traffic for this long means the connection may outlive its actor. */
 const STALE_AFTER_MS = 5_000;
-/** Delay before a dropped connection is reopened. */
-const RECONNECT_DELAY_MS = 250;
 
 export interface WebSocketTransportOptions {
 	url: string;
@@ -24,13 +22,12 @@ export interface WebSocketTransportOptions {
 export class WebSocketTransport implements ActorTransport {
 	private readonly options: WebSocketTransportOptions;
 	private readonly recordListeners: Array<(record: Record<string, unknown>) => void> = [];
+	private readonly closeListeners: Array<() => void> = [];
 	private readonly connectListeners: Array<(isReconnect: boolean) => void> = [];
 	private socket: WebSocket | undefined;
 	private connecting: Promise<void> | undefined;
-	private closed = false;
 	private everConnected = false;
 	private lastActivity = 0;
-	private retryTimer: NodeJS.Timeout | undefined;
 
 	constructor(options: WebSocketTransportOptions) {
 		this.options = options;
@@ -42,6 +39,11 @@ export class WebSocketTransport implements ActorTransport {
 
 	onRecord(listener: (record: Record<string, unknown>) => void): void {
 		this.recordListeners.push(listener);
+	}
+
+	/** Reports a dropped connection; the owner decides whether to reconnect. */
+	onClose(listener: () => void): void {
+		this.closeListeners.push(listener);
 	}
 
 	/** `isReconnect` is true for every connect after the first. */
@@ -56,7 +58,6 @@ export class WebSocketTransport implements ActorTransport {
 		const looksAlive = this.connected && Date.now() - this.lastActivity < STALE_AFTER_MS;
 		if (looksAlive) return Promise.resolve();
 		if (this.connecting) return this.connecting;
-		this.closed = false;
 		const stale = this.socket;
 		this.socket = undefined;
 		stale?.terminate();
@@ -74,7 +75,10 @@ export class WebSocketTransport implements ActorTransport {
 					// installed; it must not clear or reconnect the newer one.
 					if (this.socket !== socket) return;
 					this.socket = undefined;
-					this.scheduleReconnect();
+					// No reconnect here. Connecting wakes a suspended actor, so
+					// the next turn is what reopens the socket; an idle gateway
+					// must be able to leave the actor asleep.
+					for (const listener of this.closeListeners) listener();
 				});
 				socket.on("error", (error: Error) => {
 					this.options.log?.(`transport error: ${error.message}`);
@@ -100,9 +104,6 @@ export class WebSocketTransport implements ActorTransport {
 	}
 
 	async close(): Promise<void> {
-		this.closed = true;
-		if (this.retryTimer) clearTimeout(this.retryTimer);
-		this.retryTimer = undefined;
 		const socket = this.socket;
 		this.socket = undefined;
 		if (!socket) return;
@@ -126,18 +127,6 @@ export class WebSocketTransport implements ActorTransport {
 		for (const listener of this.recordListeners) listener(record as Record<string, unknown>);
 	}
 
-	private scheduleReconnect(): void {
-		if (this.closed) return;
-		if (this.retryTimer) return;
-		this.retryTimer = setTimeout(() => {
-			this.retryTimer = undefined;
-			void this.connect().catch((error: unknown) => {
-				this.options.log?.(`reconnect failed: ${error instanceof Error ? error.message : String(error)}`);
-				this.scheduleReconnect();
-			});
-		}, RECONNECT_DELAY_MS);
-		this.retryTimer.unref?.();
-	}
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

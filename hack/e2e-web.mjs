@@ -11,13 +11,14 @@
  * point is that each conversation owns a distinct actor and its own log, not
  * that two actors run at once.
  *
- *   1. the page and /metrics are served
- *   2. a conversation streams a reply and is recorded under its own actor
- *   3. dropping the socket mid-stream and reconnecting with `since` replays
+ *   1. `POST /messages` answers a curl-sized request with the settled reply
+ *   2. the page and /metrics are served
+ *   3. a conversation streams a reply and is recorded under its own actor
+ *   4. dropping the socket mid-stream and reconnecting with `since` replays
  *      exactly the missed frames, with no duplicate and no gap
- *   4. the idle window suspends the actor with no command, and the next
+ *   5. the idle window suspends the actor with no command, and the next
  *      message resumes it; the resume latency lands in /metrics
- *   5. a second conversation gets a different actor and its own log
+ *   6. a second conversation gets a different actor and its own log
  */
 import { spawn, execFile } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
@@ -176,6 +177,20 @@ async function main() {
 
 		const page = await fetch(`http://127.0.0.1:${port}/`);
 		check("the page is served", page.status === 200 && /pi-agent-substrate/.test(await page.text()));
+
+		// The curl entry point: one request, one settled reply. It runs first
+		// because it needs no socket and proves the turn path on its own.
+		const curlReply = await fetch(`http://127.0.0.1:${port}/messages`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ conversation: conversations[0], text: "hello from curl" }),
+		});
+		const curlBody = await curlReply.json();
+		check(
+			"POST /messages answers with the settled reply",
+			curlReply.status === 200 && /Hello from the mock model/.test(curlBody.text ?? ""),
+			JSON.stringify(curlBody),
+		);
 
 		const [alphaId, betaId] = conversations;
 		if (!alphaId || !betaId) throw new Error("PI_CONVERSATIONS needs two ids");

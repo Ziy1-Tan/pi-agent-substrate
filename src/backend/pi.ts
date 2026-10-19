@@ -11,6 +11,8 @@ export interface ActorTransport {
 	send(record: Record<string, unknown>): void;
 	/** Receives every record from the actor. */
 	onRecord(listener: (record: Record<string, unknown>) => void): void;
+	/** Receives connection loss. Called at most once per connection. */
+	onClose(listener: () => void): void;
 	/** Receives every successful connect; the flag says whether it is a reconnect. */
 	onConnect(listener: (isReconnect: boolean) => void): void;
 	close(): Promise<void>;
@@ -91,6 +93,11 @@ export class PiBackend implements AgentBackend {
 			this.generation += 1;
 			if (isReconnect) this.recoverInFlight();
 		});
+		// A suspended actor answers a recovery request with its bridge's live
+		// cache, which is empty after restore; a cached turn from before the
+		// suspend would be invisible to the actor and wrong to serve. Forgetting
+		// settled results on disconnect makes the next retry run the turn.
+		this.transport.onClose(() => this.settled.clear());
 	}
 
 	submit(request: AgentRequest, onDelta: AgentEventListener): Promise<AgentResponse> {

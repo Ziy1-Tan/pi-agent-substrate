@@ -11,8 +11,9 @@ import { join } from "node:path";
 
 import { WebSocket, WebSocketServer } from "ws";
 
-import type { Sequenced } from "../channel/events.js";
-import type { UploadInput, WebChannel, WebChannelEvent } from "../channel/web.js";
+import type { Sequenced } from "./events.js";
+import type { WebChannel, WebChannelEvent } from "./web.js";
+import { MAX_UPLOAD_BYTES, saveUploads, type UploadInput } from "./uploads.js";
 import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
 
 export interface WebServerOptions {
@@ -22,6 +23,11 @@ export interface WebServerOptions {
 	specFor: (conversationId: string) => ConversationSpec;
 	/** Directory holding `ui.html`; defaults to the compiled module's folder. */
 	uiDir?: string;
+	/**
+	 * Called once per conversation whose turn has just started or settled, so
+	 * the caller can mirror the state into another channel.
+	 */
+	onTurnState?: (conversationId: string, state: "started" | "settled") => void;
 	log?: (message: string) => void;
 }
 
@@ -44,6 +50,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
 	async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+		if (url.pathname === "/messages") {
+			if (request.method !== "POST") {
+				response.writeHead(405, { "content-type": "application/json", allow: "POST" });
+				response.end(JSON.stringify({ error: "use POST" }));
+				return;
+			}
+			await handleHttpMessage(request, response);
+			return;
+		}
 		if (url.pathname === "/metrics") {
 			response.writeHead(200, { "content-type": "application/json" });
 			response.end(JSON.stringify(options.manager.getMetrics().snapshot(), null, 2));
@@ -75,6 +90,70 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		}
 		response.writeHead(404, { "content-type": "text/plain" });
 		response.end("not found");
+	}
+
+	/** `POST /messages` -> one turn, with the settled reply in the response. */
+	async function handleHttpMessage(request: IncomingMessage, response: ServerResponse): Promise<void> {
+		let body: Record<string, unknown>;
+		try {
+			body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+		} catch (error) {
+			respond(response, 400, { error: describe(error) });
+			return;
+		}
+		const conversationId =
+			typeof body.conversation === "string" && body.conversation ? body.conversation : "local/chat";
+		const text = typeof body.text === "string" ? body.text : "";
+		const messageId = typeof body.messageId === "string" ? body.messageId : randomUUID();
+		const uploads = Array.isArray(body.attachments) ? (body.attachments as UploadInput[]) : undefined;
+		if (text.trim().length === 0 && !uploads?.length) {
+			respond(response, 400, { error: "text or attachments required" });
+			return;
+		}
+
+		let entry: Awaited<ReturnType<GatewayManager["ensure"]>>;
+		try {
+			entry = await options.manager.ensure(options.specFor(conversationId));
+		} catch (error) {
+			respond(response, 502, { error: `cannot open ${conversationId}: ${describe(error)}` });
+			return;
+		}
+
+		// The reply is settled before the call returns, so the caller reads it
+		// as ordinary JSON. The conversation's own event log still has every
+		// preview, for a browser attached at the same time.
+		let reply: string | undefined;
+		let failure: string | undefined;
+		const listener = (event: Sequenced<WebChannelEvent>) => {
+			if (event.value.type === "final") reply = event.value.text;
+			if (event.value.type === "error") failure = event.value.text;
+		};
+		entry.channel.onEvent(listener);
+		try {
+			const attachments = await saveUploads(entry.conversation.filesDir, messageId, uploads);
+			await options.manager.receive(conversationId, {
+				userId: typeof body.userId === "string" ? body.userId : "curl",
+				userName: typeof body.userName === "string" ? body.userName : "curl",
+				text,
+				messageId,
+				attachments,
+			});
+		} catch (error) {
+			respond(response, 502, { error: describe(error), messageId });
+			return;
+		} finally {
+			entry.channel.offEvent(listener);
+		}
+		if (failure) {
+			respond(response, 502, { error: failure, messageId });
+			return;
+		}
+		// A conversation can deliver through Telegram while a browser watches
+		// the same log; the frame is what keeps the two views in step.
+		if (entry.outbound !== entry.channel && reply !== undefined) {
+			entry.channel.recordHistory([{ type: "outbound", text: reply, messageId }]);
+		}
+		respond(response, 200, { conversation: conversationId, messageId, text: reply ?? "" });
 	}
 
 	const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
@@ -203,6 +282,30 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		},
 	};
+}
+
+/** Reads a request body with a hard cap, so a stray upload cannot exhaust memory. */
+function readBody(request: IncomingMessage): Promise<string> {
+	return new Promise((resolve, reject) => {
+		let size = 0;
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > MAX_FRAME_BYTES) {
+				reject(new Error(`request body exceeds ${MAX_FRAME_BYTES} bytes`));
+				request.destroy();
+				return;
+			}
+			chunks.push(chunk);
+		});
+		request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+		request.on("error", reject);
+	});
+}
+
+function respond(response: ServerResponse, status: number, body: unknown): void {
+	response.writeHead(status, { "content-type": "application/json" });
+	response.end(JSON.stringify(body));
 }
 
 function send(client: WebSocket, payload: unknown): void {

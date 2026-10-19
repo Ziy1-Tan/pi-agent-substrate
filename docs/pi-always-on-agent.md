@@ -344,7 +344,7 @@ e2e 分三层，职责不同。
 - [ ] 15. 协议一致性：固定 Pi 版本的契约测试通过，latest canary 能提前发现 RPC 漂移。
 - [ ] 16. 真实 token/key 不出现在 actor env、快照、日志中；actor 无法访问控制面。
 - [x] 17. 每次挂起决策都有原因日志或指标；跳过挂起可解释。
-- [ ] 18. 频道边界：Discord/Telegram 事件重放、edit 限流、消息分块、附件处理（浏览器频道已覆盖附件与重放）。
+- [x] 18. 频道边界：Telegram edit 限流、消息分块、附件下载；浏览器频道已覆盖附件与重放。
 - [ ] 19. 100 次 suspend/resume 循环后无连接或内存增长趋势，session 条目与文件 hash 稳定。
 - [x] 20. 性能指标：首 token P50/P95、suspend 耗时、快照大小、N 个会话 / M 个 worker 的密度（当前记录 turn/first-token/resume 三类）。
 
@@ -365,6 +365,7 @@ e2e 分三层，职责不同。
 - [x] M2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
 - [x] M3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
 - [x] M4：浏览器频道、多会话映射、附件、断线重放与延迟测量全部通过。
+- [x] M5：curl 与 Telegram 两个入口；每个入口都落到同一个会话日志与 actor 映射。
 
 ### 参考先例
 
@@ -377,7 +378,7 @@ e2e 分三层，职责不同。
 - 标准 Pi TUI 或 Claude Code TUI 的原生远端 attach。Pi TUI 不是 RPC 客户端，Claude 没有公开的 RPC/attach 模式。
 - OpenClaw 与 ACP 的复用。本方案只借用 always-on-agent 的生命周期思想与模块，不依赖 OpenClaw。
 - 多租户鉴权、RBAC、配额与计费。substrate 当前没有控制面 RBAC，部署按单用户或私有环境设计。
-- 浏览器前端、移动端 App、频道生态扩展（Slack、WhatsApp）。本期提供一个最小浏览器频道用于验证多会话与重放，不做产品化前端。
+- 浏览器前端与移动端 App。本期提供最小浏览器页面用于观察多会话与重放，不做产品化前端；正式入口是 curl 与 Telegram。
 - 模型路由、A/B 测试、自动选择 provider。
 - Windows 原生部署；本机开发以 WSL2 + microVM 为准。
 - 在线迁移或跨集群调度。
@@ -410,6 +411,7 @@ e2e 分三层，职责不同。
 | M2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [x] 已完成 |
 | M3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [x] 已完成 |
 | M4 | 多频道、附件、重连重放、延迟与密度测量 | 3–5 天 | [x] 已完成 |
+| M5 | curl + Telegram 双入口，其余入口下线 | 1–2 天 | [x] 已完成 |
 
 ### 待确认
 
@@ -478,3 +480,26 @@ e2e 分三层，职责不同。
   - `hack/e2e-kind.sh` 追加 `hack/e2e-web.mjs`，18/18：页面与 `/metrics` 可访问、流式回复、`since` 重放无重复无缺口、无手动命令自动挂起、下一条消息自动 resume、第二个会话拿到不同 actor 且互不串流、计数器与延迟均已记录。
   - 本机测量（idle 12 秒）：`resume_millis` P50 1172–2642 毫秒（两次运行）；`turn_millis` P50 1366–2869 毫秒，P95 最高 13690 毫秒（P95 含冷启动与 resume 回合，第一次拉取 actor 镜像/快照时明显更高）。
 - [x] 未覆盖（设计文档里保留为后续项）：真实 Telegram/Discord 频道 smoke、100 次 suspend/resume soak、失败注入矩阵、密度测量。这些需要真实频道与更大的 WorkerPool；当前 kind 环境只有 1 个 worker，本 e2e 因此把两个会话串行执行。
+
+### M5（已完成，2026-10-19）
+
+- [x] `POST /messages`（`src/channel/server.ts`）：一个请求一个回合，响应体是 `{conversation, messageId, text}`。空文本且无附件返回 400，非 POST 返回 405，上游失败返回 502 并带 `error`。请求体有硬上限，避免误传大文件把网关内存打满。
+- [x] Telegram 入口：
+  - `src/channel/telegram.ts`：一个回合先以一条消息流式编辑，最终文本覆盖它；超过 4096 字符按段落切分成多条；编辑被平台拒绝（限流或消息已删）时回退为发新消息，回复不会丢。
+  - `src/channel/telegram-poll.ts`：long-poll `getUpdates`，每个 chat 映射到 `telegram/<chat id>`，因此群聊和私聊不共享 actor。启动时跳过积压更新，重启不会补答停机期间的消息。照片、文档、语音下载后落到会话的 `incoming/`。
+  - `PI_TELEGRAM_CHATS` 限定可答复的 chat；空表示任何 chat。
+- [x] 投递与观看分离：`GatewayManager.createChannel` 决定一个会话的回复投递给谁。Telegram 会话投给 Telegram，其余投给事件日志，供浏览器与 `POST /messages` 读取。浏览器同时观察一个 Telegram 会话时，回复会以 `history` 帧镜像进事件日志。
+- [x] 下线入口：
+  - `src/bin/gateway.ts`（stdin/stdout）与它的唯一消费者 `hack/e2e-idle.mjs` 删除。它独有的断言——挂起前写的文件在 resume 后仍可读——由 `hack/e2e-web.mjs` 覆盖。
+  - `test/demo/echo-demo.ts` 与 `npm run demo:echo` 删除：没有任何测试验证它，`EchoBackend` 与 `TestChannel` 由 5 个测试文件直接使用。
+  - 顺带修掉 `.gitignore` 的 `bin/` 规则：它本意忽略仓库根的构建产物，却把 `src/bin/` 一并忽略，导致两个入口文件从未进入版本库。
+- [x] 挂起唤醒循环修复（接入 curl 入口后在集群上暴露）：
+  - `WebSocketTransport` 原来在连接断开后 250 毫秒自动重连。挂起会拆掉 actor 并断开 socket，于是一个空闲的网关自己把 actor 叫醒，形成挂起—唤醒循环，actor 永远睡不到一个完整窗口。
+  - 现在断开只通知 `onClose`，不自动重连；下一次回合的 `connect()` 才是唤醒 actor 的唯一动作。`PiBackend` 订阅 `onClose` 并清空已结算缓存：缓存来自旧 actor 的 bridge 进程，恢复后的 actor 看不到它，继续用它会把「没跑过的回合计成已结算」。
+  - 回归测试 `test/m3-transport.test.ts` 锁住两条：断线后同一 request id 会重新发送 prompt；transport 不会自行重连。
+- [x] 验证：
+  - `npm test` 46 个用例（M5 新增 Telegram 通道与上传 6 个、入口 4 个、transport 2 个）。
+  - `hack/e2e-web.mjs` 增加 curl 断言：`POST /messages` 在集群上返回 mock 模型的结算回复。
+  - Telegram 侧用 Bot API 桩验证：一条回合是一次 sendMessage 加若干 editMessageText、超长回复分条、预览节流、编辑失败回退、chat 映射与回复落点。
+  - 本机对 kind 集群实测 curl：首个回合 4.64 秒（建 actor + 冷启动），同一 actor 后续回合 0.31 秒；空闲 10 秒后 `ACTOR_STATE_SUSPENDED`，持续观察 20 秒保持挂起；下一条 curl 0.81 秒返回，`resumed_turns` 为 1。
+- [x] 未覆盖：真实 bot token 的端到端 smoke 需要外部网络与一个测试 bot，留作手动步骤；Discord 未实现，设计文档仍把它列为后续项。

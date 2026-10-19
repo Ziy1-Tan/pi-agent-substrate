@@ -1,4 +1,4 @@
-/** A conversation's actor, as the lifecycle controller refers to it. */
+/** A conversation's actor, identified the way the lifecycle controller sees it. */
 export interface ActorRef {
 	atespace: string;
 	name: string;

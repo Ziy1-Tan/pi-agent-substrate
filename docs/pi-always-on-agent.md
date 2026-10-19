@@ -465,7 +465,7 @@ e2e 分三层，职责不同。
 - [x] 浏览器频道 `src/channel/{web,server,events}.ts` + `src/channel/ui.html`：一个 HTTP 端口同时提供页面、`/events`（WebSocket）、`/status` 与 `/metrics`。页面显示流式回复、actor/生命周期状态、每个会话一个标签页，支持附件、`status`、`new session`、`stop`。
 - [x] 多会话映射 `src/gateway/manager.ts`：`conversationId -> {conversation, gateway, backend, lifecycle, actor}`。actor 名 = `PI_ACTOR_PREFIX` + 规范化后的 conversation id（默认 `pi-`，即 `web/alpha -> pi-web-alpha`），首次打开时 create-if-absent。
   - 每个会话独立 actor、独立 `channel.jsonl`、独立锁；一个会话失败不影响其余。
-  - 新 actor 建好后立即应用 egress 策略。egress 是按 actor 生效的，漏掉这一步的表现是「回合完成但回复为空」——Pi 连不上模型后自行重试，最后由 `agent_settled` 以空文本收尾。
+  - 新 actor 建好后立即应用 egress 策略。egress 是按 actor 生效的，漏掉这一步的表现是「回合完成但回复为空」：Pi 连不上模型后自行重试，最后由 `agent_settled` 以空文本收尾。
 - [x] 附件：浏览器以 base64 上传，网关写入会话的 `incoming/` 目录前经过文件名净化（只取叶子名、去掉路径分隔符），再作为 `AttachmentInput` 交给 runtime。runtime 复制到 `filesDir` 并在 prompt 的 transcript 里列出 `/workspace/incoming/...`，与真实频道走同一条路径。
 - [x] 断线重放 `src/channel/events.ts`：每个事件分配一次递增 `seq`，环形缓冲保留最近 2000 条。客户端重连带 `since=<seq>`，服务端只补发该序号之后的事件；同一个 `seq` 不会重复下发，也不会跳过。
   - 预览帧携带「累积到目前的整段回复」而不是增量，重放时按序覆盖即可重建文本。

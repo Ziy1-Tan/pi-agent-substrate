@@ -11,7 +11,7 @@ export interface ActorTransport {
 	send(record: Record<string, unknown>): void;
 	/** Receives every record from the actor. */
 	onRecord(listener: (record: Record<string, unknown>) => void): void;
-	/** Receives every successful connect; the flag marks a reconnect. */
+	/** Receives every successful connect; the flag says whether it is a reconnect. */
 	onConnect(listener: (isReconnect: boolean) => void): void;
 	close(): Promise<void>;
 	/** True while records can be sent. */

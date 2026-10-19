@@ -7,7 +7,7 @@ cognition runs in a suspendable Substrate actor.
 This repository is at milestone **M4**. The gateway, the conversation log, the
 restart recovery path, the actor bridge, the idle lifecycle, and the browser
 channel all run and are tested on a workstation; the actor bridge, automatic
-suspend/resume, and the browser channel additionally run on a kind cluster.
+suspend/resume, and the browser channel also run on a kind cluster.
 
 ## Design
 
@@ -201,9 +201,8 @@ already-existing actor as success.
 
 ## Test channel
 
-`test/support/test-channel.ts` refuses to construct unless `NODE_ENV=test`. It
-is not imported by anything under `src/`, so production entry points cannot
-reach it.
+`test/support/test-channel.ts` refuses to construct unless `NODE_ENV=test`.
+Nothing under `src/` imports it, so production entry points cannot reach it.
 
 ## License
 

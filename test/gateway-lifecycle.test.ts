@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { EchoBackend } from "../src/backend/echo.js";
+import { StubBackend } from "./support/stub-backend.js";
 import { createConversation } from "../src/gateway/conversations.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { IdleLifecycle } from "../src/lifecycle/idle.js";
@@ -56,7 +56,7 @@ class RecordingControl implements ActorControl {
 }
 
 test("the gateway suspends after the idle window and wakes for the next turn", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pi-m3-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
 	const conversation = await createConversation(root);
 	const channel = new TestChannel();
 	const clock = new ManualClock();
@@ -67,7 +67,7 @@ test("the gateway suspends after the idle window and wakes for the next turn", a
 		idleMs: 1_000,
 		clock,
 	});
-	const gateway = new Gateway({ conversation, channel, backend: new EchoBackend(), lifecycle });
+	const gateway = new Gateway({ conversation, channel, backend: new StubBackend(), lifecycle });
 	await gateway.start();
 	t.after(async () => {
 		await gateway.stop();
@@ -87,12 +87,12 @@ test("the gateway suspends after the idle window and wakes for the next turn", a
 	await gateway.receive({ userId: "u", userName: "alice", text: "again" });
 	await gateway.waitForIdle();
 	assert.equal(channel.sent.length, 2);
-	assert.equal(channel.sent[1]?.text, "Echo: again");
+	assert.equal(channel.sent[1]?.text, "Reply: again");
 	assert.equal(lifecycle.state, "GRACE", "the resumed turn settles into a fresh grace window");
 });
 
 test("a turn in flight is never suspended", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pi-m3-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
 	const conversation = await createConversation(root);
 	const clock = new ManualClock();
 	const control = new RecordingControl();
@@ -105,7 +105,7 @@ test("a turn in flight is never suspended", async (t) => {
 	const gateway = new Gateway({
 		conversation,
 		channel: new TestChannel(),
-		backend: new EchoBackend({ delayMs: 1_000 }),
+		backend: new StubBackend({ delayMs: 1_000 }),
 		lifecycle,
 	});
 	await gateway.start();
@@ -130,7 +130,7 @@ test("a failed turn still ends, so the idle window can arm", async (t) => {
 	// A provider outage fails the turn after `turnStarted`. If the lifecycle
 	// never hears the matching settle, it stays ACTIVE and the actor is never
 	// suspended again: one transient error would pin a worker forever.
-	const root = await mkdtemp(join(tmpdir(), "pi-m3-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
 	const conversation = await createConversation(root);
 	const channel = new TestChannel();
 	const clock = new ManualClock();
@@ -141,7 +141,7 @@ test("a failed turn still ends, so the idle window can arm", async (t) => {
 		idleMs: 1_000,
 		clock,
 	});
-	const backend = new EchoBackend();
+	const backend = new StubBackend();
 	const original = backend.submit.bind(backend);
 	backend.submit = async () => {
 		throw new Error("provider unreachable");
@@ -166,5 +166,5 @@ test("a failed turn still ends, so the idle window can arm", async (t) => {
 	backend.submit = original;
 	await gateway.receive({ userId: "u", userName: "alice", text: "hello again" });
 	await gateway.waitForIdle();
-	assert.equal(channel.sent.at(-1)?.text, "Echo: hello again");
+	assert.equal(channel.sent.at(-1)?.text, "Reply: hello again");
 });

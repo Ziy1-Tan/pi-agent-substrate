@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Clustered M4 e2e: the browser channel against a real actor.
+ * Clustered channel e2e: the browser and curl entry points against a real actor.
  *
  * The web gateway runs locally against the router port-forward, so the
  * conversation-to-actor mapping, the replay ring, and the metrics are all the

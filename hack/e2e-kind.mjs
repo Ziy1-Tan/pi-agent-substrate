@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Clustered M2 e2e. It drives the real path with no fake actor:
+ * Clustered bridge e2e. It drives the real path with no fake actor:
  *
  *   test process -> atenet-router -> actor (bridge -> pi -> mock LLM)
  *

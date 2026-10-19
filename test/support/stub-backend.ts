@@ -1,17 +1,20 @@
-import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "../gateway/types.js";
+import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "../../src/gateway/types.js";
 
-export interface EchoBackendOptions {
+export interface StubBackendOptions {
 	prefix?: string;
 	chunkSize?: number;
 	delayMs?: number;
 }
 
 /**
- * Deterministic stand-in for pi. It parses the caller's text out of the
- * transcript prompt, streams the reply in chunks, and remembers completed
- * request ids so a retried turn is never executed twice.
+ * Deterministic stand-in for the actor bridge. It answers with the caller's
+ * own text, streams the reply in pieces so preview handling is exercised, and
+ * remembers completed request ids so a retried turn is never executed twice.
+ *
+ * This is test scaffolding, not a production backend: it keeps no connection,
+ * runs no process, and derives its answer from the prompt alone.
  */
-export class EchoBackend implements AgentBackend {
+export class StubBackend implements AgentBackend {
 	private readonly prefix: string;
 	private readonly chunkSize: number;
 	private readonly delayMs: number;
@@ -19,8 +22,8 @@ export class EchoBackend implements AgentBackend {
 
 	readonly executedRequestIds: string[] = [];
 
-	constructor(options: EchoBackendOptions = {}) {
-		this.prefix = options.prefix ?? "Echo: ";
+	constructor(options: StubBackendOptions = {}) {
+		this.prefix = options.prefix ?? "Reply: ";
 		this.chunkSize = Math.max(1, options.chunkSize ?? 4);
 		this.delayMs = options.delayMs ?? 1;
 	}
@@ -28,7 +31,6 @@ export class EchoBackend implements AgentBackend {
 	submit(request: AgentRequest, onDelta: AgentEventListener): Promise<AgentResponse> {
 		const cached = this.results.get(request.requestId);
 		if (cached) {
-			// Replay the settled text to the new subscriber without re-executing.
 			return cached.then((response) => {
 				onDelta(response.text);
 				return response;
@@ -49,8 +51,7 @@ export class EchoBackend implements AgentBackend {
 		const text = `${this.prefix}${lastMessageText(request.prompt)}`;
 		let offset = 0;
 		while (offset < text.length) {
-			const chunk = text.slice(offset, offset + this.chunkSize);
-			onDelta(chunk);
+			onDelta(text.slice(offset, offset + this.chunkSize));
 			offset += this.chunkSize;
 			if (this.delayMs > 0) await delay(this.delayMs);
 		}
@@ -58,6 +59,7 @@ export class EchoBackend implements AgentBackend {
 	}
 }
 
+/** The user's line of a formatted transcript, for tests that assert on it. */
 export function lastMessageText(prompt: string): string {
 	const lines = prompt
 		.split("\n")

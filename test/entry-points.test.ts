@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { EchoBackend } from "../src/backend/echo.js";
+import { StubBackend } from "./support/stub-backend.js";
 import { startWebServer, type WebServer } from "../src/channel/server.js";
 import { TelegramChannel } from "../src/channel/telegram.js";
 import { TelegramPoll } from "../src/channel/telegram-poll.js";
@@ -17,7 +17,7 @@ interface Setup {
 }
 
 async function setup(t: test.TestContext, telegram = false): Promise<Setup> {
-	const root = await mkdtemp(join(tmpdir(), "pi-m6-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-entry-"));
 	const manager = new GatewayManager({
 		dataDir: root,
 		actorUrl: "ws://127.0.0.1:1",
@@ -28,7 +28,7 @@ async function setup(t: test.TestContext, telegram = false): Promise<Setup> {
 				return "running" as const;
 			},
 		},
-		createBackend: () => new EchoBackend({ chunkSize: 40, delayMs: 0 }),
+		createBackend: () => new StubBackend({ chunkSize: 40, delayMs: 0 }),
 		createChannel: telegram
 			? (conversation) =>
 					new TelegramChannel({
@@ -69,7 +69,7 @@ test("curl posts a message and reads the settled reply in the response", async (
 	assert.equal(response.status, 200);
 	const body = (await response.json()) as { conversation: string; messageId: string; text: string };
 	assert.equal(body.conversation, "cli/one");
-	assert.equal(body.text, "Echo: hello from curl");
+	assert.equal(body.text, "Reply: hello from curl");
 	assert.ok(body.messageId.length > 0);
 });
 
@@ -84,8 +84,8 @@ test("a second turn in the same conversation sees the earlier one", async (t) =>
 			})
 		).json()) as { text: string };
 
-	assert.equal((await post("first")).text, "Echo: first");
-	assert.equal((await post("second")).text, "Echo: second");
+	assert.equal((await post("first")).text, "Reply: first");
+	assert.equal((await post("second")).text, "Reply: second");
 });
 
 test("a bad request is answered with a status, not a hang", async (t) => {
@@ -110,7 +110,7 @@ test("a bad request is answered with a status, not a hang", async (t) => {
 
 test("a telegram chat becomes its own conversation and replies in the chat", async (t) => {
 	const api = telegramApi();
-	const root = await mkdtemp(join(tmpdir(), "pi-m6-tg-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-entry-telegram-"));
 	const manager = new GatewayManager({
 		dataDir: root,
 		actorUrl: "ws://127.0.0.1:1",
@@ -121,7 +121,7 @@ test("a telegram chat becomes its own conversation and replies in the chat", asy
 				return "running" as const;
 			},
 		},
-		createBackend: () => new EchoBackend({ chunkSize: 40, delayMs: 0 }),
+		createBackend: () => new StubBackend({ chunkSize: 40, delayMs: 0 }),
 		createChannel: (conversation) =>
 			new TelegramChannel({
 				botToken: "token",
@@ -153,7 +153,7 @@ test("a telegram chat becomes its own conversation and replies in the chat", asy
 	const sends = api.calls.filter((call) => call.method === "sendMessage");
 	assert.ok(sends.length > 0, "the bot replied in the chat");
 	assert.equal(sends.at(-1)?.body.chat_id, "42");
-	assert.match(String(sends.at(-1)?.body.text), /Echo: hello from telegram/);
+	assert.match(String(sends.at(-1)?.body.text), /Reply: hello from telegram/);
 });
 
 interface Api {

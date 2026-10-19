@@ -6,16 +6,16 @@ import test, { type TestContext } from "node:test";
 
 import { PiBackend } from "../src/backend/pi.js";
 import { startBridge, type Bridge } from "../src/bridge/bridge.js";
+import { createConversation } from "../src/gateway/conversations.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { WebSocketTransport } from "../src/transport/websocket.js";
-import { readRecords, recordTypes } from "./support/records.js";
 import { resolvePiBin, startMockLlm, writePiConfig } from "./support/bridge-harness.js";
+import { readRecords, recordTypes } from "./support/records.js";
 import { TestChannel } from "./support/test-channel.js";
-import { createTestConversation } from "./support/test-conversation.js";
 
 interface E2EHarness {
 	root: string;
-	conversation: Awaited<ReturnType<typeof createTestConversation>>;
+	conversation: Awaited<ReturnType<typeof createConversation>>;
 	channel: TestChannel;
 	gateway: Gateway;
 	/** Stops the actor the way a suspend would, keeping its workspace. */
@@ -31,7 +31,7 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 	const agentDir = join(root, "agent");
 	const workspace = join(root, "workspace");
 	await writePiConfig(agentDir, llm.url);
-	const conversation = await createTestConversation(join(root, "gateway"));
+	const conversation = await createConversation(join(root, "gateway"));
 	const channel = new TestChannel();
 	// One port for the conversation: a resume puts a new process on it.
 	const port = 18_700 + Math.floor(Math.random() * 200);
@@ -66,7 +66,7 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 		async suspend() {
 			await bridge?.close();
 			bridge = undefined;
-			// M2 has no lifecycle controller yet; close the socket the way a
+			// No lifecycle controller here: close the socket the way a
 			// restart would, so the next message opens a fresh one.
 			await transport.close();
 		},

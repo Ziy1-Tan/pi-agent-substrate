@@ -13,30 +13,30 @@ the same conversation log, actor mapping, and idle lifecycle.
 The design baseline, including implementation status, is
 [docs/pi-always-on-agent.md](docs/pi-always-on-agent.md).
 
-## Scope
+## What it does
 
-M1 extracts the channel and conversation runtime from pi-chat into a standalone
-gateway. M2 adds the actor side: a bridge that exposes `pi --mode rpc` as a
-WebSocket inside a Substrate actor, and a gateway backend that drives it. M3
-adds the idle lifecycle: the gateway suspends an actor that has no turn in
-flight and the router resumes it on the next message. M4 adds one actor per
-conversation, attachments, reconnect replay, and latency metrics. The entry
-points are a browser page, `curl`, and Telegram; an incoming message is the
-only thing that wakes an actor.
+The channel and conversation runtime from pi-chat runs as a standalone
+gateway. A bridge exposes `pi --mode rpc` as a WebSocket inside a Substrate
+actor, and a gateway backend drives it. The idle lifecycle suspends an actor
+that has no turn in flight, and the router resumes it on the next message.
+Each conversation gets its own actor, attachments, reconnect replay, and
+latency metrics. The entry points are a browser page, `curl`, and Telegram;
+an incoming message is the only thing that wakes an actor.
 
-| Exit criterion | Where it is verified |
+| Behaviour | Where it is verified |
 |---|---|
-| A test channel echoes a message, with streaming edits | `test/m1.test.ts` |
-| After a gateway restart, unfinished deliveries resume from `channel.jsonl` | `test/m1.test.ts` |
-| The bridge forwards prompts to real `pi` and streams its reply | `test/m2-bridge.test.ts` |
-| A channel message reaches `pi` through the gateway and streams back | `test/m2-e2e.test.ts` |
+| A test channel echoes a message, with streaming edits | `test/gateway.test.ts` |
+| After a gateway restart, unfinished deliveries resume from `channel.jsonl` | `test/gateway.test.ts` |
+| The bridge forwards prompts to real `pi` and streams its reply | `test/bridge.test.ts` |
+| A channel message reaches `pi` through the gateway and streams back | `test/bridge-e2e.test.ts` |
 | Manually suspending the actor resumes on the next message, session and files intact | `hack/e2e-kind.sh` |
-| An idle actor suspends with no command, and the next message resumes it | `test/m3-idle.test.ts`, `hack/e2e-web.mjs` |
-| A browser turn streams, and a reconnect with `since` replays only what was missed | `test/m4-server.test.ts`, `hack/e2e-web.mjs` |
-| `curl` gets the settled reply in the HTTP response | `test/m6-entry.test.ts`, `hack/e2e-web.mjs` |
-| A Telegram chat becomes a conversation and the reply lands in the chat | `test/m5-channels.test.ts`, `test/m6-entry.test.ts` |
-| Two conversations map to two actors and two logs | `test/m4-web.test.ts`, `hack/e2e-web.mjs` |
-| An upload survives the trip to `/workspace/incoming` | `test/m4-web.test.ts` |
+| An idle actor suspends with no command, and the next message resumes it | `test/idle-lifecycle.test.ts`, `hack/e2e-web.mjs` |
+| A browser turn streams, and a reconnect with `since` replays only what was missed | `test/web-server.test.ts`, `hack/e2e-web.mjs` |
+| `curl` gets the settled reply in the HTTP response | `test/entry-points.test.ts`, `hack/e2e-web.mjs` |
+| A Telegram chat becomes a conversation and the reply lands in the chat | `test/telegram.test.ts`, `test/entry-points.test.ts` |
+| Two conversations map to two actors and two logs | `test/manager.test.ts`, `hack/e2e-web.mjs` |
+| An upload survives the trip to `/workspace/incoming` | `test/uploads.test.ts` |
+| A provider failure reaches the user as an error, and the actor still idles | `test/bridge.test.ts`, `test/gateway-lifecycle.test.ts` |
 
 ## Run
 
@@ -97,7 +97,6 @@ already includes it.
 src/gateway/          Gateway state machine, conversation layout, multi-conversation manager
 src/lifecycle/        Idle-suspend state machine and the kubectl-ate control
 src/channel/          Browser, curl, and Telegram channels; HTTP/WebSocket server; replay ring
-src/backend/echo.ts   Deterministic, idempotent echo backend
 src/backend/pi.ts     Backend over the actor bridge (idempotent per request id)
 src/bridge/           Actor-side bridge: WebSocket <-> `pi --mode rpc`
 src/protocol/         LF framing and the pinned RPC subset
@@ -109,7 +108,7 @@ images/mock-llm/      OpenAI-compatible mock for the clustered e2e
 deploy/test/          WorkerPool, ActorTemplate, mock LLM, egress policy
 hack/e2e-kind.sh      Build, deploy, and run the clustered e2e
 hack/e2e-web.mjs      Clustered curl + browser + suspend/resume e2e
-test/                 Acceptance tests, M1 through M6
+test/                 Acceptance tests, named for the behaviour they cover
 test/support/         Test channel and test conversation layout (test builds only)
 third_party/pi-chat   Vendored conversation runtime, see its README
 ```

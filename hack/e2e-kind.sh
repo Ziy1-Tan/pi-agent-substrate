@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build, push, and deploy the M2 actor + mock LLM onto a kind cluster that
+# Build, push, and deploy the actor + mock LLM onto a kind cluster that
 # already has Agent Substrate installed, then run the clustered e2e.
 #
 # Assumes:

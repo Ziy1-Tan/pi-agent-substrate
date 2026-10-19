@@ -20,7 +20,7 @@ tags:
 个人 agent（Pi、Claude 等）的使用节奏是突发式的：用户聊几轮后离开，几小时甚至几天后回来继续。agent 绝大部分时间处于空闲，但用户希望它「一直在线」。当前的三条路径各有缺口：
 
 1. 本地常驻进程。实现最简单，但持续占用本机资源，没有沙箱隔离；合上笔记本或退出终端，会话就断了，也无法把多个 agent 复用到少量计算资源上。
-2. substrate 的任务驱动形态（A 方案）。actor 可以挂起，状态可跨恢复保留，但只有同步 HTTP `/submit`，没有流式输出、没有 TUI 体验，也没有连接保持与空闲判定。挂起需要外部显式调用。
+2. 直接用 substrate 的任务驱动形态。actor 可以挂起，状态可跨恢复保留，但只有同步 HTTP `/submit`，没有流式输出、没有 TUI 体验，也没有连接保持与空闲判定。挂起需要外部显式调用。
 3. pi-chat。有 Discord/Telegram 频道、对话日志、流式渲染、附件和 secrets 交换，但每个频道拉起本地 Gondolin micro-VM 与 tmux worker，没有挂起概念，也不能交给 substrate 调度。
 
 同时存在三个平台侧限制：
@@ -359,13 +359,13 @@ e2e 分三层，职责不同。
 | 凭证泄漏 | actor env、快照、日志中零命中真实 token/key | 安全 |
 | 密度 | 2 会话 / 1 worker 空闲时全部挂起 | 资源 |
 
-### 里程碑出口条件
+### 出口条件
 
-- [x] M1：测试频道 echo 可用；网关重启后能从 `channel.jsonl` 恢复未完成投递。
-- [x] M2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
-- [x] M3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
-- [x] M4：浏览器频道、多会话映射、附件、断线重放与延迟测量全部通过。
-- [x] M5：curl 与 Telegram 两个入口；每个入口都落到同一个会话日志与 actor 映射。
+- [x] 里程碑 1：测试频道可用；网关重启后能从 `channel.jsonl` 恢复未完成投递。
+- [x] 里程碑 2：单频道端到端打通（mock LLM）；手动 suspend → 下一条消息自动 resume。
+- [x] 里程碑 3：自动空闲挂起、自动 resume、session 与文件连续性全部通过。
+- [x] 里程碑 4：浏览器频道、多会话映射、附件、断线重放与延迟测量全部通过。
+- [x] 里程碑 5：curl 与 Telegram 两个入口；每个入口都落到同一个会话日志与 actor 映射。
 
 ### 参考先例
 
@@ -405,13 +405,13 @@ e2e 分三层，职责不同。
 
 ### 里程碑
 
-| 阶段 | 内容 | 估计 | 状态 |
+| 里程碑 | 内容 | 估计 | 状态 |
 |---|---|---|---|
-| M1 | 抽离 pi-chat 频道与对话运行时为 standalone 网关，echo 后端验证消息与流式编辑 | 3–5 天 | [x] 已完成 |
-| M2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [x] 已完成 |
-| M3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [x] 已完成 |
-| M4 | 多频道、附件、重连重放、延迟与密度测量 | 3–5 天 | [x] 已完成 |
-| M5 | curl + Telegram 双入口，其余入口下线 | 1–2 天 | [x] 已完成 |
+| 1 | 抽离 pi-chat 频道与对话运行时为 standalone 网关，用确定性的假后端验证消息与流式编辑 | 3–5 天 | [x] 已完成 |
+| 2 | actor 镜像与 RPC bridge，单频道端到端打通 | 2–3 天 | [x] 已完成 |
+| 3 | 接入 idle-suspender，验证 suspend → resume → session 续接 | 2–3 天 | [x] 已完成 |
+| 4 | 多会话、附件、重连重放、延迟与密度测量 | 3–5 天 | [x] 已完成 |
+| 5 | curl + Telegram 双入口，其余入口下线 | 1–2 天 | [x] 已完成 |
 
 ### 待确认
 
@@ -422,15 +422,15 @@ e2e 分三层，职责不同。
 
 ## 实现状态
 
-### M1（已完成）
+### 里程碑 1：独立网关与对话状态
 
 - [x] 独立网关：复用 pi-chat 的 `ConversationRuntime`，每个 turn 的状态写入 `channel.jsonl`。
 - [x] 测试频道：`test/support/test-channel.ts` 仅在 `NODE_ENV=test` 下可构造，验证消息投递与流式预览编辑。
-- [x] 幂等 echo 后端：`src/backend/echo.ts` 按 request id 缓存结果，重试不重复执行。
+- [x] 幂等假后端：`test/support/stub-backend.ts` 按 request id 缓存结果，重试不重复执行；它只服务测试，不连 actor。
 - [x] 重启恢复：覆盖提交前、提交后未响应、发送后未记录 outbound、响应已记录未确认四个时间点。
 - [x] 回归测试：`npm test` 运行 6 个用例，覆盖以上行为。
 
-### M2（已完成，2026-10-19）
+### 里程碑 2：actor 内的 RPC bridge
 
 - [x] actor 内 RPC bridge：`src/bridge/`，一个端口同时提供 `/healthz`（ActorTemplate wakeupProbe）与 WebSocket；stdout 严格按 LF 分帧，`U+2028`/`U+2029` 不参与切分（`src/protocol/lines.ts`）。
 - [x] 回合关联：`prompt` 带 `requestId`，回合结算时桥额外发 `bridge_result`；`bridge_get_state` / `bridge_result` 支持断线后取回已完成回合。
@@ -441,10 +441,10 @@ e2e 分三层，职责不同。
   - 快照恢复后 gVisor 里 Pi 子进程可能以 SIGILL 退出。bridge 惰性启动 Pi，并在客户端连接时按固定 `--session-id` 重启，session 文件续接，不重跑上一回合。
   - actor 出网默认被拒；mock LLM 必须由 EgressPolicy 放行，真实部署改成 provider 域名并由 egress 注入凭证。
 - [x] 验证：
-  - `npm test` 16 个用例（M1 6 + L1 分帧 4 + bridge 4 + 本地端到端 2）。
+  - `npm test` 16 个用例（网关与重启恢复 6 + 分帧 4 + bridge 4 + 本地端到端 2）。
   - `hack/e2e-kind.sh` 在 kind 上 7/7：流式回复、bash 工具写 `/workspace/e2e.txt`、手动 suspend、下一条消息经 router 自动 resume、文件与 session 均续接。
 
-### M3（已完成，2026-10-19）
+### 里程碑 3：空闲挂起与自动恢复
 
 - [x] 生命周期状态机 `src/lifecycle/idle.ts`：`IDLE → ACTIVE → GRACE → SUSPENDING → SUSPENDED`。只有 `turnSettled()` 进入 `GRACE`，`turnStarted()` 一定离开它；挂起只在回合边界发起，因为 substrate 的 suspend 会取消进行中的工作而不是排空。
 - [x] 竞态处理：
@@ -456,13 +456,12 @@ e2e 分三层，职责不同。
 - [x] 连接修复（实际挂起暴露出两个缺陷）：
   - 挂起会拆掉 actor 但不一定给客户端发 FIN，本地 socket 仍报告 `OPEN`。现在 `WebSocketTransport` 用 `staleAfterMs`（默认 5 秒无流量）判断连接是否可疑，并在 `connect()` 时替换；`PiBackend.dispatch` 每次都向 transport 请求连接，而不是只看 `connected`。
   - 被替换的旧 socket 关闭时不能清掉新 socket，也不能触发重连。
-- [x] 本地网关入口 `src/bin/gateway.ts`：环境变量配置，stdin 收消息，stdout 用 `<<<reply` / `reply>>>` 框住多行回复；`hack/e2e-idle.mjs` 用它跑真实 router 路径。
 - [x] 验证：
-  - `npm test` 23 个用例（M1 6 + 分帧 4 + bridge 4 + 本地端到端 2 + 生命周期 5 + 网关生命周期 2）。
-  - `hack/e2e-kind.sh` 追加 `hack/e2e-idle.mjs`，5/5：流式回复、写 `/workspace/idle.txt`、无手动命令自动 `ACTOR_STATE_SUSPENDED`、下一条消息 router 自动 resume、文件仍可读。
+  - `npm test` 23 个用例（网关 6 + 分帧 4 + bridge 4 + 本地端到端 2 + 生命周期 5 + 网关生命周期 2）。
+  - `hack/e2e-kind.sh` 追加空闲挂起用例，5/5：流式回复、写 `/workspace/idle.txt`、无手动命令自动 `ACTOR_STATE_SUSPENDED`、下一条消息 router 自动 resume、文件仍可读。
   - 本机测量：空闲窗口 15 秒，实际 `idleMs` 15001–15002 毫秒；挂起后首个回合（含 resume）1253 毫秒。
 
-### M4（已完成，2026-10-19）
+### 里程碑 4：浏览器频道、多会话与指标
 
 - [x] 浏览器频道 `src/channel/{web,server,events}.ts` + `src/channel/ui.html`：一个 HTTP 端口同时提供页面、`/events`（WebSocket）、`/status` 与 `/metrics`。页面显示流式回复、actor/生命周期状态、每个会话一个标签页，支持附件、`status`、`new session`、`stop`。
 - [x] 多会话映射 `src/gateway/manager.ts`：`conversationId -> {conversation, gateway, backend, lifecycle, actor}`。actor 名由会话 id 规范化得到，前缀固定为 `pi-`（`web/alpha -> pi-web-alpha`），首次打开时 create-if-absent。没有 `PI_ACTOR_PREFIX` 这个环境变量；`hack/e2e-web.mjs` 里的同名常量只用于独立推导预期名字。
@@ -476,12 +475,12 @@ e2e 分三层，职责不同。
   - `resumed` 在 `ready()` 之前判定，且把 `SUSPENDING` 也算作 resume：`ready()` 可能把 `SUSPENDED` 改成 `IDLE`，而挂起请求在途时 actor 同样会消失，两种状态下这一回合都需要把 actor 叫醒。
 - [x] 控制命令：`stop` 走 `PiBackend.cancel`（向 Pi 发 `abort` 并让本回合 reject），`new` 走 `new_session`。两者都不改 `channel.jsonl` 的历史。
 - [x] 验证：
-  - `npm test` 34 个用例（在 M3 基础上加 web 频道/重放/附件/指标 6 个、HTTP+WebSocket 服务 5 个）。
+  - `npm test` 34 个用例（在上一阶段基础上加 web 频道/重放/附件/指标 6 个、HTTP+WebSocket 服务 5 个）。
   - `hack/e2e-kind.sh` 追加 `hack/e2e-web.mjs`，18/18：页面与 `/metrics` 可访问、流式回复、`since` 重放无重复无缺口、无手动命令自动挂起、下一条消息自动 resume、第二个会话拿到不同 actor 且互不串流、计数器与延迟均已记录。
   - 本机测量（idle 12 秒）：`resume_millis` P50 1172–2642 毫秒（两次运行）；`turn_millis` P50 1366–2869 毫秒，P95 最高 13690 毫秒（P95 含冷启动与 resume 回合，第一次拉取 actor 镜像/快照时明显更高）。
 - [x] 未覆盖（设计文档里保留为后续项）：真实 Telegram/Discord 频道 smoke、100 次 suspend/resume soak、失败注入矩阵、密度测量。这些需要真实频道与更大的 WorkerPool；当前 kind 环境只有 1 个 worker，本 e2e 因此把两个会话串行执行。
 
-### M5（已完成，2026-10-19）
+### 里程碑 5：curl 与 Telegram 入口
 
 - [x] `POST /messages`（`src/channel/server.ts`）：一个请求一个回合，响应体是 `{conversation, messageId, text}`。空文本且无附件返回 400，非 POST 返回 405，上游失败返回 502 并带 `error`。请求体有硬上限，避免误传大文件把网关内存打满。
 - [x] Telegram 入口：
@@ -491,14 +490,14 @@ e2e 分三层，职责不同。
 - [x] 投递与观看分离：`GatewayManager.createChannel` 决定一个会话的回复投递给谁。Telegram 会话投给 Telegram，其余投给事件日志，供浏览器与 `POST /messages` 读取。浏览器同时观察一个 Telegram 会话时，回复会以 `history` 帧镜像进事件日志。
 - [x] 下线入口：
   - `src/bin/gateway.ts`（stdin/stdout）与它的唯一消费者 `hack/e2e-idle.mjs` 删除。它独有的断言——挂起前写的文件在 resume 后仍可读——由 `hack/e2e-web.mjs` 覆盖。
-  - `test/demo/echo-demo.ts` 与 `npm run demo:echo` 删除：没有任何测试验证它，`EchoBackend` 与 `TestChannel` 由 5 个测试文件直接使用。
+  - 早期演示脚本删除：没有任何测试验证它，而 `StubBackend` 与 `TestChannel` 已由多个测试文件直接使用。
   - 顺带修掉 `.gitignore` 的 `bin/` 规则：它本意忽略仓库根的构建产物，却把 `src/bin/` 一并忽略，导致两个入口文件从未进入版本库。
 - [x] 挂起唤醒循环修复（接入 curl 入口后在集群上暴露）：
   - `WebSocketTransport` 原来在连接断开后 250 毫秒自动重连。挂起会拆掉 actor 并断开 socket，于是一个空闲的网关自己把 actor 叫醒，形成挂起—唤醒循环，actor 永远睡不到一个完整窗口。
   - 现在断开只通知 `onClose`，不自动重连；下一次回合的 `connect()` 才是唤醒 actor 的唯一动作。`PiBackend` 订阅 `onClose` 并清空已结算缓存：缓存来自旧 actor 的 bridge 进程，恢复后的 actor 看不到它，继续用它会把「没跑过的回合计成已结算」。
-  - 回归测试 `test/m3-transport.test.ts` 锁住两条：断线后同一 request id 会重新发送 prompt；transport 不会自行重连。
+  - 回归测试 `test/transport.test.ts` 锁住两条：断线后同一 request id 会重新发送 prompt；transport 不会自行重连。
 - [x] 验证：
-  - `npm test` 46 个用例（M5 新增 Telegram 通道与上传 6 个、入口 4 个、transport 2 个）。
+  - `npm test` 46 个用例（新增 Telegram 通道与上传 6 个、入口 4 个、transport 2 个）。
   - `hack/e2e-web.mjs` 增加 curl 断言：`POST /messages` 在集群上返回 mock 模型的结算回复。
   - Telegram 侧用 Bot API 桩验证：一条回合是一次 sendMessage 加若干 editMessageText、超长回复分条、预览节流、编辑失败回退、chat 映射与回复落点。
   - 本机对 kind 集群实测 curl：首个回合 4.64 秒（建 actor + 冷启动），同一 actor 后续回合 0.31 秒；空闲 10 秒后 `ACTOR_STATE_SUSPENDED`，持续观察 20 秒保持挂起；下一条 curl 0.81 秒返回，`resumed_turns` 为 1。
@@ -517,8 +516,8 @@ e2e 分三层，职责不同。
 
 两处独立缺陷，都会让一次失败看起来像一次「成功的空回复」：
 
-1. **失败的回合不结算生命周期**。`turnStarted()` 在提交前把 `inflight` 加一，只有走到底的回合才调用 `turnSettled()`。提交或响应抛错时只记一条 `job_failed`，`inflight` 停在 1；`turnSettled()` 从此被 `inflight > 0` 挡掉，状态永远到不了 `GRACE`。一次 provider 抖动就让该 actor 再也不会空闲挂起。现在失败路径也在 `finally` 里结算（注入式崩溃除外），并新增 `test/m3-gateway.test.ts` 的用例锁住「失败后仍能挂起」。
-2. **provider 错误被当成空文本**。Pi 用 `message_end` 的 `stopReason: "error"` + `errorMessage` 报告失败，重试耗尽时还有 `auto_retry_end.success: false` + `finalError`；网关此前只看 `agent_settled`，把空字符串当作正常回复写进 `channel.jsonl`。现在 bridge 读取这两个信号，先发 `bridge_result`（带 `error`）再转发 `agent_settled`，backend 把错误放进 `AgentResponse.error`，网关记 `job_failed` 并通过 `Channel.sendError` 把原因送到 curl、浏览器或 Telegram。`test/m2-bridge.test.ts` 用 503 的 mock provider 覆盖这条路径。
+1. **失败的回合不结算生命周期**。`turnStarted()` 在提交前把 `inflight` 加一，只有走到底的回合才调用 `turnSettled()`。提交或响应抛错时只记一条 `job_failed`，`inflight` 停在 1；`turnSettled()` 从此被 `inflight > 0` 挡掉，状态永远到不了 `GRACE`。一次 provider 抖动就让该 actor 再也不会空闲挂起。现在失败路径也在 `finally` 里结算（注入式崩溃除外），并新增 `test/gateway-lifecycle.test.ts` 的用例锁住「失败后仍能挂起」。
+2. **provider 错误被当成空文本**。Pi 用 `message_end` 的 `stopReason: "error"` + `errorMessage` 报告失败，重试耗尽时还有 `auto_retry_end.success: false` + `finalError`；网关此前只看 `agent_settled`，把空字符串当作正常回复写进 `channel.jsonl`。现在 bridge 读取这两个信号，先发 `bridge_result`（带 `error`）再转发 `agent_settled`，backend 把错误放进 `AgentResponse.error`，网关记 `job_failed` 并通过 `Channel.sendError` 把原因送到 curl、浏览器或 Telegram。`test/bridge.test.ts` 用 503 的 mock provider 覆盖这条路径。
 
 ### 真实 provider 的接入要点（已修复）
 

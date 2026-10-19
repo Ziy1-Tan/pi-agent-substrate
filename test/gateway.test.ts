@@ -4,26 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { EchoBackend } from "../src/backend/echo.js";
+import { createConversation } from "../src/gateway/conversations.js";
 import { Gateway, GatewayAbort } from "../src/gateway/gateway.js";
 import type { GatewayHooks } from "../src/gateway/types.js";
 import { readRecords, recordTypes } from "./support/records.js";
+import { StubBackend } from "./support/stub-backend.js";
 import { TestChannel } from "./support/test-channel.js";
-import { createTestConversation } from "./support/test-conversation.js";
 
 interface Harness {
 	root: string;
-	conversation: Awaited<ReturnType<typeof createTestConversation>>;
+	conversation: Awaited<ReturnType<typeof createConversation>>;
 	channel: TestChannel;
-	backend: EchoBackend;
+	backend: StubBackend;
 	open(hooks?: GatewayHooks): Promise<Gateway>;
 }
 
 async function createHarness(t: TestContext, delayMs = 0): Promise<Harness> {
 	const root = await mkdtemp(join(tmpdir(), "pi-gateway-"));
-	const conversation = await createTestConversation(root);
+	const conversation = await createConversation(root);
 	const channel = new TestChannel();
-	const backend = new EchoBackend({ chunkSize: 3, delayMs });
+	const backend = new StubBackend({ chunkSize: 3, delayMs });
 	const gateways: Gateway[] = [];
 	t.after(async () => {
 		for (const gateway of gateways) await gateway.stop().catch(() => undefined);
@@ -59,17 +59,17 @@ function counts(records: { type: string }[], type: string): number {
 	return records.filter((record) => record.type === type).length;
 }
 
-test("test channel echoes a message with streaming edits", async (t) => {
+test("test channel delivers a message with streaming edits", async (t) => {
 	const harness = await createHarness(t);
 	const gateway = await harness.open();
 	await gateway.receive(message);
 	await gateway.waitForIdle();
 
 	assert.equal(harness.channel.sent.length, 1);
-	assert.equal(harness.channel.sent[0]?.text, "Echo: hello");
+	assert.equal(harness.channel.sent[0]?.text, "Reply: hello");
 	assert.ok(harness.channel.sent[0]?.replyToMessageId, "outbound replies to the inbound message");
 	assert.ok(harness.channel.previews.length >= 2, "reply arrived as more than one preview edit");
-	assert.equal(harness.channel.previews.at(-1), "Echo: hello");
+	assert.equal(harness.channel.previews.at(-1), "Reply: hello");
 	assert.equal(harness.channel.previewClears, 1);
 
 	const records = await readRecords(harness.conversation.logPath);
@@ -110,7 +110,7 @@ test("restart before submit delivers the queued turn exactly once", async (t) =>
 	assert.equal(counts(after, "job_completed"), 1);
 	assert.equal(harness.backend.executedRequestIds.length, 1);
 	assert.equal(harness.channel.sent.length, 1);
-	assert.equal(harness.channel.sent[0]?.text, "Echo: hello");
+	assert.equal(harness.channel.sent[0]?.text, "Reply: hello");
 });
 
 test("restart after submit but before response reuses the request id", async (t) => {
@@ -141,7 +141,7 @@ test("restart after submit but before response reuses the request id", async (t)
 	assert.equal(counts(after, "job_completed"), 1);
 	assert.equal(harness.backend.executedRequestIds.length, 1, "no duplicate execution");
 	assert.equal(harness.channel.sent.length, 1);
-	assert.equal(harness.channel.sent[0]?.text, "Echo: hello");
+	assert.equal(harness.channel.sent[0]?.text, "Reply: hello");
 });
 
 test("restart after the response was recorded only acknowledges the turn", async (t) => {

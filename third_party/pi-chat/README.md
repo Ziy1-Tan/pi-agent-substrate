@@ -26,9 +26,10 @@ src/render/format.ts
 ```
 
 The Discord and Telegram adapters (`src/live/discord.ts`, `src/live/telegram.ts`,
-`src/live/common.ts`, `src/live/index.ts`) are not copied yet. M1 only needs the
-channel interface; the real adapters arrive with the channel milestone.
-`src/services`, `src/gondolin.ts`, `src/secrets.ts`, and the TUI are not copied.
+`src/live/common.ts`, `src/live/index.ts`) are not copied: only the channel
+interface is needed, and this repository's own adapters implement it under
+`src/channel/`. `src/services`, `src/gondolin.ts`, `src/secrets.ts`, and the TUI
+are not copied.
 
 ## Modifications
 

@@ -18,7 +18,7 @@ function sanitize(value: string): string {
  */
 export async function createConversation(
 	rootDir: string,
-	conversationId = "test/echo",
+	conversationId = "test/chat",
 ): Promise<ResolvedConversation> {
 	const [accountId, channelKey] = conversationId.split("/");
 	if (!accountId || !channelKey) throw new Error(`invalid conversation id: ${conversationId}`);

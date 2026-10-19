@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 
-import { EchoBackend } from "../src/backend/echo.js";
+import { StubBackend } from "./support/stub-backend.js";
 import { startWebServer, type WebServer } from "../src/channel/server.js";
 import { GatewayManager } from "../src/gateway/manager.js";
 
@@ -62,7 +62,7 @@ async function connect(port: number, conversation: string, since?: number): Prom
 }
 
 async function setup(t: test.TestContext): Promise<{ server: WebServer; root: string }> {
-	const root = await mkdtemp(join(tmpdir(), "pi-m4-web-"));
+	const root = await mkdtemp(join(tmpdir(), "pi-webserver-"));
 	const manager = new GatewayManager({
 		dataDir: root,
 		actorUrl: "ws://127.0.0.1:1",
@@ -73,7 +73,7 @@ async function setup(t: test.TestContext): Promise<{ server: WebServer; root: st
 				return "running" as const;
 			},
 		},
-		createBackend: () => new EchoBackend({ chunkSize: 5 }),
+		createBackend: () => new StubBackend({ chunkSize: 5 }),
 	});
 	const server = await startWebServer({
 		manager,
@@ -116,7 +116,7 @@ test("a browser turn streams previews and ends with the final text", async (t) =
 	client.send({ type: "message", text: "hello from the browser" });
 
 	const final = await client.waitFor((frame) => frame.type === "final", "final");
-	assert.equal(final.text, "Echo: hello from the browser");
+	assert.equal(final.text, "Reply: hello from the browser");
 	// Previews carry the accumulated reply, so the newest one already matches.
 	const previews = client.frames.filter((frame) => frame.type === "preview").map((frame) => frame.text ?? "");
 	assert.ok(previews.length > 1, "the reply arrived in pieces");
@@ -158,7 +158,7 @@ test("reconnecting with a cursor replays the missed frames without duplicates", 
 	assert.equal(new Set(replayed).size, replayed.length, "no frame is delivered twice");
 
 	const final = await resumed.waitFor((frame) => frame.type === "final", "final after reconnect");
-	assert.equal(final.text, "Echo: drop me mid stream");
+	assert.equal(final.text, "Reply: drop me mid stream");
 });
 
 test("status, history, and stop are answered per conversation", async (t) => {
@@ -177,7 +177,7 @@ test("status, history, and stop are answered per conversation", async (t) => {
 		records.map((record) => record.type),
 		["inbound", "outbound"],
 	);
-	assert.equal(records.at(-1)?.text, "Echo: remember this");
+	assert.equal(records.at(-1)?.text, "Reply: remember this");
 
 	client.send({ type: "status" });
 	const status = await client.waitFor((frame) => frame.type === "status" && frame.queueLength !== undefined, "status");
@@ -205,8 +205,8 @@ test("two conversations keep separate logs and separate actors", async (t) => {
 	await alpha.waitFor((frame) => frame.type === "final", "alpha final");
 	await beta.waitFor((frame) => frame.type === "final", "beta final");
 
-	assert.equal(alpha.frames.some((frame) => frame.text === "Echo: beta only"), false);
-	assert.equal(beta.frames.some((frame) => frame.text === "Echo: alpha only"), false);
+	assert.equal(alpha.frames.some((frame) => frame.text === "Reply: beta only"), false);
+	assert.equal(beta.frames.some((frame) => frame.text === "Reply: alpha only"), false);
 	assert.ok((await readLogs(root)).some((path) => path.includes("alpha")));
 	assert.ok((await readLogs(root)).some((path) => path.includes("beta")));
 });

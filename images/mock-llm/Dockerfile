@@ -1,4 +1,4 @@
-# Mock OpenAI-compatible LLM for the clustered e2e (M2/M3).
+# Mock OpenAI-compatible LLM for the clustered end-to-end tests.
 FROM node:22-bookworm-slim
 WORKDIR /app
 COPY server.mjs .

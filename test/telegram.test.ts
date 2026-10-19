@@ -2,10 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { splitMessage, TelegramChannel } from "../src/channel/telegram.js";
-import { MAX_UPLOAD_BYTES, saveUploads } from "../src/channel/uploads.js";
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 interface Call {
 	method: string;
@@ -121,23 +117,4 @@ test("splitMessage prefers paragraph breaks and never drops text", () => {
 	const parts = splitMessage(text, 60);
 	assert.equal(parts.join("\n\n"), text);
 	assert.ok(parts.every((part) => part.length <= 60));
-});
-
-test("uploads are decoded, capped, and kept inside the files directory", async (t) => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-uploads-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
-
-	const [saved] = await saveUploads(dir, "msg-1", [
-		{ name: "../../escape.txt", data: Buffer.from("body").toString("base64") },
-	]);
-	assert.equal(saved?.name, "escape.txt");
-	assert.ok(saved?.path.startsWith(dir));
-
-	await assert.rejects(
-		saveUploads(dir, "msg-2", [
-			{ name: "big.bin", data: Buffer.alloc(MAX_UPLOAD_BYTES + 1).toString("base64") },
-		]),
-		/exceeds/,
-	);
-	assert.ok((await stat(saved?.path ?? "")).isFile());
 });

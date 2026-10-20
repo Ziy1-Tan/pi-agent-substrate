@@ -15,9 +15,9 @@ export interface UploadInput {
 export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 /**
- * Decodes base64 uploads into the conversation's files directory. The runtime
- * then copies each one under `incoming/` and names it in the prompt, which is
- * the same path a chat-platform attachment takes.
+ * Decodes base64 uploads into the conversation's files directory, where the
+ * store records them in place and names them in the prompt, the same path a
+ * chat-platform attachment takes.
  */
 export async function saveUploads(
 	filesDir: string,

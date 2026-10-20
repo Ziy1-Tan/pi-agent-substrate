@@ -10,7 +10,7 @@ import { readRecords, recordTypes } from "./support/records.js";
 import { StubBackend } from "./support/stub-backend.js";
 import { TestChannel } from "./support/test-channel.js";
 
-/** A log the vendored pi-chat runtime wrote: one finished turn, one cut off after dispatch. */
+/** Written by the vendored pi-chat runtime: one finished turn, one cut off after dispatch, a checkpoint. */
 const LEGACY_LOG = resolve("test/fixtures/legacy-channel.jsonl");
 
 async function tempRoot(t: test.TestContext): Promise<string> {

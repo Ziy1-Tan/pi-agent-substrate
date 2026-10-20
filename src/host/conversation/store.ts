@@ -22,7 +22,6 @@ import type {
 /** Where one conversation lives on the gateway's disk. */
 export interface Conversation {
 	conversationId: string;
-	conversationDir: string;
 	/** Shown to the agent as `/workspace`. */
 	workspaceDir: string;
 	/** Attachments land here, inside the workspace. */
@@ -47,7 +46,6 @@ export async function createConversation(rootDir: string, conversationId = "test
 	const workspaceDir = join(conversationDir, "workspace");
 	const conversation: Conversation = {
 		conversationId,
-		conversationDir,
 		workspaceDir,
 		filesDir: join(workspaceDir, "incoming"),
 		logPath: join(conversationDir, "channel.jsonl"),
@@ -65,7 +63,7 @@ export async function createConversation(rootDir: string, conversationId = "test
  */
 export class ConversationStore {
 	readonly conversation: Conversation;
-	private records: ConversationRecord[];
+	private readonly records: ConversationRecord[];
 	private nextRecordId: number;
 	/** Mutations run one at a time, so the log on disk is in record order. */
 	private tail: Promise<unknown> = Promise.resolve();
@@ -206,6 +204,8 @@ export class ConversationStore {
 	}
 
 	private async append<T extends ConversationRecord>(fields: DistributiveOmit<T, "recordId" | "timestamp">): Promise<T> {
+		// `fields` is T minus the two keys added here, which TypeScript cannot
+		// recombine through the distributive Omit.
 		const record = { ...fields, recordId: this.nextRecordId++, timestamp: new Date().toISOString() } as unknown as T;
 		this.records.push(record);
 		await appendFile(this.conversation.logPath, `${JSON.stringify(record)}\n`, "utf8");

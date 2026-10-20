@@ -74,6 +74,5 @@ export interface GatewayOptions {
 	lifecycle?: Pick<IdleLifecycle, "turnStarted" | "turnSettled" | "ready" | "state">;
 	onTurn?: (report: TurnReport) => void;
 	hooks?: GatewayHooks;
-	ownerId?: string;
 }
 

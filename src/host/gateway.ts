@@ -49,7 +49,7 @@ export class Gateway {
 
 	async start(): Promise<void> {
 		if (this.started) throw new Error("gateway is already started");
-		this.store = await ConversationStore.open(this.options.conversation, this.options.ownerId ?? lockOwner());
+		this.store = await ConversationStore.open(this.options.conversation, lockOwner());
 		// The log decides what is unfinished; this process only schedules it.
 		this.queue = this.store.unfinishedJobs();
 		this.started = true;

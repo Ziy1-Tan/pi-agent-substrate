@@ -34,6 +34,13 @@ const port = Number(process.env.PI_WEB_PORT ?? 8899);
 const actorPrefix = process.env.PI_ACTOR_PREFIX ?? "pi-";
 const kubectlAte = process.env.KUBECTL_ATE ?? "kubectl-ate";
 const kubeContext = process.env.KUBE_CONTEXT;
+/**
+ * The template the gateway creates actors from. Without an explicit value the
+ * gateway falls back to `pi-actor`, which is the manual template, not the one
+ * the run just built; a leftover actor from an earlier run would then resume
+ * against a snapshot its worker no longer holds.
+ */
+const actorTemplate = process.env.PI_ACTOR_TEMPLATE ?? "pi-e2e";
 const conversations = (process.env.PI_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
 
 /** Mirrors `actorNameFor` in the gateway; the e2e checks the mapping it relies on. */
@@ -79,6 +86,32 @@ async function actorState(name) {
 		return entry?.status?.state ?? "UNKNOWN";
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * Removes an actor this e2e may have left behind. It is bound to the template
+ * of whichever run created it, and a rerun rebuilds that template, so the old
+ * actor can no longer resume; keeping it turns the next run into a 503 from
+ * the router rather than a clean start.
+ */
+async function removeActor(name) {
+	if ((await actorState(name)) === undefined) return;
+	const args = [
+		kubectlAte,
+		...(kubeContext ? ["--context", kubeContext] : []),
+		"delete",
+		"actor",
+		name,
+		"-a",
+		atespace,
+		"--any-state",
+	];
+	try {
+		await promisify(execFile)(args[0], args.slice(1), { maxBuffer: 16 * 1024 * 1024 });
+		log(`removed leftover actor ${name}`);
+	} catch (error) {
+		log(`could not remove leftover actor ${name}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -144,6 +177,10 @@ function connect(conversation, since) {
 }
 
 async function main() {
+	// Both conversations get an actor on first use. Clear whatever an earlier
+	// run left so this run tests the template it was given.
+	for (const conversationId of conversations) await removeActor(actorNameFor(conversationId));
+
 	const dataDir = await mkdtemp(join(tmpdir(), "pi-web-e2e-"));
 	const gateway = spawn(process.execPath, ["dist/src/bin/web.js"], {
 		env: {
@@ -152,6 +189,7 @@ async function main() {
 			PI_WEB_PORT: String(port),
 			PI_ACTOR_URL: `ws://${new URL(router).host}`,
 			PI_ATESPACE: atespace,
+			PI_ACTOR_TEMPLATE: actorTemplate,
 			PI_IDLE_SECONDS: String(idleSeconds),
 			PI_CONVERSATIONS: conversations.join(","),
 		},

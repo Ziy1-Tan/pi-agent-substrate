@@ -28,6 +28,7 @@ const actor = process.env.PI_ACTOR ?? "pi-actor-1";
 const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
 const kubectlAte = process.env.KUBECTL_ATE ?? "kubectl-ate";
 const kubeContext = process.env.KUBE_CONTEXT;
+const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.yaml";
 
 const log = (message) => console.log(`[e2e] ${message}`);
 
@@ -145,7 +146,9 @@ async function main() {
 	// is allowed to be SUSPENDED; readiness is proven by the bridge hello.
 	// The mock LLM is the only egress the actor is allowed. A real deployment
 	// points this at the model provider and keeps the key in the egress layer.
-	await ate("create", "egress-policy", actor, "-a", atespace, "-f", "deploy/test/egress-policy.yaml").catch((error) => {
+	// The file is named once and the name passed explicitly: wrapping the call
+	// in catch() would read as the policy path to anyone editing that line.
+	await ate("create", "egress-policy", actor, "-a", atespace, "-f", egressPolicy).catch((error) => {
 		if (!String(error).includes("AlreadyExists")) throw error;
 		log("egress policy already present");
 	});

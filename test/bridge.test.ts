@@ -31,7 +31,9 @@ test("bridge relays a prompt to pi and streams the reply back", async (t) => {
 		client.events.some((event) => event.type === "message_update"),
 		"streaming deltas reached the client",
 	);
-	assert.ok(client.events.some((event) => event.type === "agent_settled"), "settled event reached the client");
+	// The bridge sends its result before Pi's own settle event, so that event
+	// may still be in flight when the result arrives.
+	await client.waitFor((event) => event.type === "agent_settled");
 
 	const prompt = harness.llm.requests.at(-1);
 	assert.ok(prompt, "the mock provider received the turn");

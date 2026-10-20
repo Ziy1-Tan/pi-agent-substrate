@@ -22,7 +22,7 @@ and re-align state.
 
 | Layer | Role | Source |
 |---|---|---|
-| Channel | Where the human speaks | pi-chat's conversation runtime and renderer; the curl, browser, and Telegram adapters live here |
+| Channel | Where the human speaks | pi-chat's conversation runtime and renderer; the curl and Telegram adapters live here |
 | Gateway | Connection keep-alive and lifecycle decisions | always-on-agent's `idle-suspender` idea |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
 | Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
@@ -96,9 +96,9 @@ Gateway to control plane: the ateapi over podcert mTLS or ServiceAccount
 identity in production, the `kubectl-ate` subprocess locally. Operations:
 CreateActor, ResumeActor, SuspendActor, GetActor.
 
-Client to gateway: channel clients through their own adapters, the browser and
-curl through the gateway's HTTP/WebSocket API, which relays prompts and events
-and never touches an actor directly.
+Client to gateway: channel clients through their own adapters; curl through
+the gateway's HTTP API, which relays prompts and replies and never touches an
+actor directly.
 
 ### Delivery state machine
 

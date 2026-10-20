@@ -3,7 +3,7 @@
  * Gateway entry point. Two ways in, one gateway behind them:
  *
  *   curl   POST /messages with {conversation, text} and read the reply in the
- *          response; the browser page and the WebSocket use the same server.
+ *          response.
  *   chat   when PI_TELEGRAM_TOKEN is set, every Telegram chat becomes a
  *          conversation and the bot replies in that chat.
  *
@@ -15,7 +15,6 @@
  *
  *   PI_WEB_PORT            HTTP port (default 8788)
  *   PI_GATEWAY_DATA_DIR    conversation storage root (default `/tmp/pi-gateway`)
- *   PI_CONVERSATIONS       comma-separated conversation ids the page offers
  *   PI_ACTOR_URL           bridge WebSocket, usually the router's port-forward
  *   PI_ACTOR_TEMPLATE      template used to create a missing actor
  *   PI_EGRESS_POLICY       manifest applied to each new actor (default
@@ -46,10 +45,6 @@ const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.
 const telegramToken = process.env.PI_TELEGRAM_TOKEN;
 const telegramApi = process.env.PI_TELEGRAM_API;
 const telegramChats = (process.env.PI_TELEGRAM_CHATS ?? "")
-	.split(",")
-	.map((value) => value.trim())
-	.filter(Boolean);
-const known = (process.env.PI_CONVERSATIONS ?? "local/chat")
 	.split(",")
 	.map((value) => value.trim())
 	.filter(Boolean);
@@ -94,7 +89,7 @@ const manager = new GatewayManager({
 	control,
 	provision,
 	// Telegram chats reply in place; every other conversation answers through
-	// its own event log, which the page and POST /messages read.
+	// POST /messages, which reads the conversation's turn recorder.
 	createChannel: (conversation) =>
 		telegramToken && conversation.conversationId.startsWith("telegram/")
 			? new TelegramChannel({
@@ -116,14 +111,12 @@ const specFor = (conversationId: string): ConversationSpec => ({
 const server = await startWebServer({
 	manager,
 	port: Number(process.env.PI_WEB_PORT ?? 8788),
-	// The page has no authentication. Loopback keeps it private; binding wider
-	// is a deliberate choice for a trusted network.
 	host: process.env.PI_WEB_HOST ?? "127.0.0.1",
 	specFor,
 	log: (message) => console.error(`[web] ${message}`),
 });
 
-console.log(`gateway on http://127.0.0.1:${server.port}/ (conversations: ${known.join(", ")})`);
+console.log(`gateway on http://127.0.0.1:${server.port}/messages`);
 if (telegramToken) {
 	console.log(`telegram polling as bot; chats: ${telegramChats.join(", ") || "any"}`);
 }

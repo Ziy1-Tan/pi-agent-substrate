@@ -43,7 +43,6 @@ async function setup(t: test.TestContext, telegram = false): Promise<Setup> {
 	const server = await startWebServer({
 		manager,
 		port: 0,
-		uiDir: join(process.cwd(), "src/channel"),
 		specFor: (conversationId) => ({
 			conversationId,
 			atespace: "pi-agents",
@@ -106,6 +105,18 @@ test("a bad request is answered with a status, not a hang", async (t) => {
 		body: "{",
 	});
 	assert.equal(notJson.status, 400);
+});
+
+test("metrics are served and unknown paths are not", async (t) => {
+	const { server } = await setup(t);
+	const metrics = await fetch(`http://127.0.0.1:${server.port}/metrics`);
+	assert.equal(metrics.status, 200);
+	const body = (await metrics.json()) as { counters: Record<string, number>; timings: Record<string, unknown> };
+	assert.deepEqual(body.counters, {});
+	assert.deepEqual(body.timings, {});
+
+	const missing = await fetch(`http://127.0.0.1:${server.port}/`);
+	assert.equal(missing.status, 404);
 });
 
 test("a telegram chat becomes its own conversation and replies in the chat", async (t) => {

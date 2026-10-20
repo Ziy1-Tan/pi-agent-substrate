@@ -17,7 +17,7 @@
 #   ATESPACE          atespace (default: pi-agents)
 #   ROUTER_URL        router base URL as seen from this machine (default: http://127.0.0.1:8000)
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
-#   WEB_PORT          port for the browser-channel e2e (default: 8899)
+#   WEB_PORT          port for the HTTP-channel e2e (default: 8899)
 #   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
 #   PROVIDER          "mock" (default) or a real provider id; a real provider
 #                     also needs the PI_PROVIDER_* values below and an egress
@@ -222,11 +222,11 @@ if [[ "${ONLY}" != "deploy" ]]; then
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     node hack/e2e-kind.js
 
-  echo "==> running the web channel e2e"
+  echo "==> running the HTTP channel e2e"
   PI_ATESPACE="${ATESPACE}" PI_ROUTER_URL="${ROUTER_URL}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     PI_ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
     PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_WEB_PORT="${WEB_PORT}" \
-    PI_CONVERSATIONS="${CONVERSATIONS}" \
+    PI_E2E_CONVERSATIONS="${CONVERSATIONS}" \
     node hack/e2e-web.js
 fi

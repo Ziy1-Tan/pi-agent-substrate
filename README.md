@@ -7,7 +7,7 @@ sleep by itself. The chat connection stays up while the thinking happens in a
 sandbox that costs nothing when idle.
 
 ```text
-Telegram / curl / browser
+Telegram / curl
         │
         ▼
    gateway (always on)          ← chat presence, conversation log, idle policy
@@ -29,14 +29,13 @@ message is the only thing that wakes it.
 
 ## What you get
 
-- Three entry points over one conversation model: Telegram, `curl`, and a
-  browser page address the same `account/channel` id.
-- Streaming replies: Telegram edits one message, the browser gets preview
-  frames, `curl` gets the settled reply in the response body.
+- Two entry points over one conversation model: Telegram and `curl` address
+  the same `account/channel` id.
+- Streaming replies: Telegram edits one message in place; `curl` gets the
+  settled reply in the response body.
 - Automatic suspend and resume with the session and `/workspace` intact.
 - One actor per conversation, so failures and context stay isolated.
 - Attachments land in `/workspace/incoming` and appear in the prompt.
-- Reconnect replay with a cursor: exactly the missed frames, no gaps.
 - Provider failures surface as errors, not empty replies.
 
 ## Quickstart
@@ -103,8 +102,6 @@ curl -s localhost:8788/messages \
 # {"conversation":"local/chat","messageId":"...","text":"..."}
 ```
 
-Browser: open `http://127.0.0.1:8788/`.
-
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -113,9 +110,8 @@ Browser: open `http://127.0.0.1:8788/`.
 | `PI_ACTOR_TEMPLATE` | `pi-actor` | Template used to create a missing actor |
 | `PI_EGRESS_POLICY` | `deploy/test/egress-policy.yaml` | Applied to each new actor |
 | `PI_IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
-| `PI_CONVERSATIONS` | `local/chat` | Conversations the page offers |
 | `PI_WEB_PORT` | `8788` | HTTP port |
-| `PI_WEB_HOST` | `127.0.0.1` | Listen address; the page has no authentication |
+| `PI_WEB_HOST` | `127.0.0.1` | Listen address |
 | `PI_GATEWAY_DATA_DIR` | `/tmp/pi-gateway` | Conversation logs and workspace |
 | `PI_TELEGRAM_TOKEN` | unset | Enables the Telegram entry point |
 | `PI_TELEGRAM_CHATS` | any | Comma-separated chat ids to answer |

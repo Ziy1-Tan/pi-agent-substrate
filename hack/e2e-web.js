@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Clustered channel e2e: the browser and curl entry points against a real actor.
+ * Clustered gateway e2e: the HTTP entry point against a real actor.
  *
- * The web gateway runs locally against the router port-forward, so the
- * conversation-to-actor mapping, the replay ring, and the metrics are all the
- * deployed code paths.
+ * The gateway runs locally against the router port-forward, so the
+ * conversation-to-actor mapping, the idle lifecycle, and the metrics are all
+ * the deployed code paths.
  *
  * A kind WorkerPool is small, so the two conversations are exercised in
  * sequence: the first one finishes and suspends before the second opens. The
@@ -12,20 +12,16 @@
  * that two actors run at once.
  *
  *   1. `POST /messages` answers a curl-sized request with the settled reply
- *   2. the page and /metrics are served
- *   3. a conversation streams a reply and is recorded under its own actor
- *   4. dropping the socket mid-stream and reconnecting with `since` replays
- *      exactly the missed frames, with no duplicate and no gap
- *   5. the idle window suspends the actor with no command, and the next
+ *   2. /metrics reports the turn, and the page is gone (404)
+ *   3. the idle window suspends the actor with no command, and the next
  *      message resumes it; the resume latency lands in /metrics
- *   6. a second conversation gets a different actor and its own log
+ *   4. a second conversation gets a different actor and its own log
  */
 import { spawn, execFile } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import WebSocket from "ws";
 
 const atespace = process.env.PI_ATESPACE ?? "pi-agents";
 const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
@@ -41,7 +37,7 @@ const kubeContext = process.env.KUBE_CONTEXT;
  * against a snapshot its worker no longer holds.
  */
 const actorTemplate = process.env.PI_ACTOR_TEMPLATE ?? "pi-e2e";
-const conversations = (process.env.PI_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
+const conversations = (process.env.PI_E2E_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
 
 /** Mirrors `actorNameFor` in the gateway; the e2e checks the mapping it relies on. */
 function actorNameFor(conversationId) {
@@ -51,11 +47,6 @@ function actorNameFor(conversationId) {
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 40);
 	return `${actorPrefix}${sanitized || "conversation"}`;
-}
-
-/** The conversation a frame belongs to; state frames carry `conversationId`. */
-function frameOwner(frame) {
-	return frame.conversationId ?? frame.conversation;
 }
 
 const log = (message) => console.log(`[web-e2e] ${message}`);
@@ -126,54 +117,14 @@ async function waitFor(getter, predicate, timeoutMs, label) {
 	throw new Error(`timed out waiting for ${label}: ${JSON.stringify(last)}`);
 }
 
-function connect(conversation, since) {
-	const query = `conversation=${encodeURIComponent(conversation)}${since === undefined ? "" : `&since=${since}`}`;
-	const socket = new WebSocket(`ws://127.0.0.1:${port}/events?${query}`);
-	const frames = [];
-	const waiters = [];
-	socket.on("message", (data) => {
-		frames.push(JSON.parse(String(data)));
-		for (const wake of waiters.splice(0)) wake();
+/** One turn through the HTTP entry point; returns the parsed response body. */
+async function post(conversationId, text) {
+	const response = await fetch(`http://127.0.0.1:${port}/messages`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ conversation: conversationId, text }),
 	});
-	return {
-		socket,
-		frames,
-		async open() {
-			await new Promise((resolve, reject) => {
-				socket.once("open", resolve);
-				socket.once("error", reject);
-			});
-		},
-		/** Waits for a frame matching `predicate`, ignoring everything already there. */
-		async next(predicate, timeoutMs, label) {
-			const start = frames.length;
-			const deadline = Date.now() + timeoutMs;
-			for (;;) {
-				const found = frames.slice(start).find(predicate);
-				if (found) return found;
-				if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}: ${JSON.stringify(frames.slice(start).slice(-6))}`);
-				await new Promise((resolve) => {
-					waiters.push(resolve);
-					setTimeout(resolve, 100);
-				});
-			}
-		},
-		async waitFor(predicate, timeoutMs, label) {
-			const deadline = Date.now() + timeoutMs;
-			for (;;) {
-				const found = frames.find(predicate);
-				if (found) return found;
-				if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}: ${JSON.stringify(frames.slice(-6))}`);
-				await new Promise((resolve) => {
-					waiters.push(resolve);
-					setTimeout(resolve, 100);
-				});
-			}
-		},
-		send(payload) {
-			socket.send(JSON.stringify(payload));
-		},
-	};
+	return { status: response.status, body: await response.json() };
 }
 
 async function main() {
@@ -192,14 +143,12 @@ async function main() {
 			PI_ATESPACE: atespace,
 			PI_ACTOR_TEMPLATE: actorTemplate,
 			PI_IDLE_SECONDS: String(idleSeconds),
-			PI_CONVERSATIONS: conversations.join(","),
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	gateway.stdout.on("data", (chunk) => process.stdout.write(chunk));
 	gateway.stderr.on("data", (chunk) => process.stderr.write(chunk));
 
-	const clients = [];
 	try {
 		await waitFor(
 			async () => {
@@ -214,64 +163,24 @@ async function main() {
 			"the web server",
 		);
 
-		const page = await fetch(`http://127.0.0.1:${port}/`);
-		check("the page is served", page.status === 200 && /pi-agent-substrate/.test(await page.text()));
-
-		// The curl entry point: one request, one settled reply. It runs first
-		// because it needs no socket and proves the turn path on its own.
-		const curlReply = await fetch(`http://127.0.0.1:${port}/messages`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ conversation: conversations[0], text: "hello from curl" }),
-		});
-		const curlBody = await curlReply.json();
-		check(
-			"POST /messages answers with the settled reply",
-			curlReply.status === 200 && /Hello from the mock model/.test(curlBody.text ?? ""),
-			JSON.stringify(curlBody),
-		);
+		const missing = await fetch(`http://127.0.0.1:${port}/`);
+		check("the browser page is gone", missing.status === 404, String(missing.status));
 
 		const [alphaId, betaId] = conversations;
-		if (!alphaId || !betaId) throw new Error("PI_CONVERSATIONS needs two ids");
+		if (!alphaId || !betaId) throw new Error("PI_E2E_CONVERSATIONS needs two ids");
 
-		const alpha = connect(alphaId);
-		clients.push(alpha);
-		await alpha.open();
-		await alpha.waitFor((frame) => frame.type === "hello", 120_000, "alpha hello");
-
-		alpha.send({ type: "message", text: "say hello to alpha" });
-		const alphaFinal = await alpha.waitFor((frame) => frame.type === "final", 120_000, "alpha final");
-		check("the first conversation streams a reply", alphaFinal.text?.includes("Hello from the mock model"), alphaFinal.text);
+		// The curl entry point: one request, one settled reply.
+		const curl = await post(alphaId, "hello from curl");
+		check(
+			"POST /messages answers with the settled reply",
+			curl.status === 200 && /Hello from the mock model/.test(curl.body.text ?? ""),
+			JSON.stringify(curl.body),
+		);
 		check(
 			"the conversation is bound to a deterministic actor",
-			(await actorState(`${actorPrefix}${alphaId.replace(/[^a-z0-9-]+/gi, "-")}`)) !== undefined,
+			(await actorState(actorNameFor(alphaId))) !== undefined,
+			actorNameFor(alphaId),
 		);
-
-		// Drop the socket mid-stream, then resume from the last frame received.
-		alpha.send({ type: "message", text: "drop this stream halfway" });
-		// Wait for a second preview so there is definitely a missed frame to
-		// replay; the first one can arrive after the stream is already done.
-		await alpha.waitFor(
-			(frame) => frame.type === "preview" && alpha.frames.filter((entry) => entry.type === "preview").length >= 2,
-			120_000,
-			"two previews",
-		);
-		const early = alpha.frames.find((frame) => frame.type === "preview");
-		const seenUpTo = early?.seq ?? 0;
-		alpha.socket.close();
-		const resumed = connect(alphaId, seenUpTo);
-		clients.push(resumed);
-		await resumed.open();
-		const hello = await resumed.waitFor((frame) => frame.type === "hello", 30_000, "hello after reconnect");
-		check("reconnect reports the live cursor", (hello.lastSeq ?? 0) > seenUpTo);
-
-		const replayed = resumed.frames.filter((frame) => frame.type === "preview").map((frame) => frame.seq ?? 0);
-		check("the missed previews are replayed", replayed.length > 0, JSON.stringify(replayed));
-		check("replay starts right after the last seen frame", Math.min(...replayed) === seenUpTo + 1, String(seenUpTo));
-		check("no frame is delivered twice", new Set(replayed).size === replayed.length);
-
-		const final = await resumed.waitFor((frame) => frame.type === "final", 120_000, "final after reconnect");
-		check("the reconnected client gets the final text", final.text?.includes("Hello from the mock model"), final.text);
 
 		// The idle lifecycle owns the actor now: no suspend command here.
 		log(`waiting ${idleSeconds}s for the idle window to suspend ${alphaId}`);
@@ -283,16 +192,6 @@ async function main() {
 		);
 		check("an idle conversation suspends on its own", (suspended.counters?.suspends ?? 0) >= 1);
 
-		resumed.send({ type: "message", text: "are you awake" });
-		const resumedFinal = await resumed.next(
-			(frame) => frame.type === "final",
-			120_000,
-			"final after resume",
-		);
-		check("the suspended conversation resumes on the next message", resumedFinal.text?.includes("Hello from the mock model"), resumedFinal.text);
-
-		// A kind WorkerPool is small, so the second conversation runs after the
-		// first one has suspended. It still gets its own actor and its own log.
 		// The lifecycle reports the suspend as soon as the control plane
 		// accepts it; the worker is only free once the actor is actually down.
 		await waitFor(
@@ -301,13 +200,23 @@ async function main() {
 			(idleSeconds + 40) * 1000,
 			"alpha to leave its worker",
 		);
-		const beta = connect(betaId);
-		clients.push(beta);
-		await beta.open();
-		await beta.waitFor((frame) => frame.type === "hello", 120_000, "beta hello");
-		beta.send({ type: "message", text: "say hello to beta" });
-		const betaFinal = await beta.waitFor((frame) => frame.type === "final", 120_000, "beta final");
-		check("the second conversation streams its own reply", betaFinal.text?.includes("Hello from the mock model"), betaFinal.text);
+
+		const resumed = await post(alphaId, "are you awake");
+		check(
+			"the suspended conversation resumes on the next message",
+			resumed.status === 200 && /Hello from the mock model/.test(resumed.body.text ?? ""),
+			JSON.stringify(resumed.body),
+		);
+
+		// A kind WorkerPool is small, so the second conversation runs after the
+		// first one has suspended. It still gets its own actor and its own log.
+		const beta = await post(betaId, "say hello to beta");
+		check(
+			"the second conversation gets its own reply",
+			beta.status === 200 && /Hello from the mock model/.test(beta.body.text ?? ""),
+			JSON.stringify(beta.body),
+		);
+
 		const alphaActor = actorNameFor(alphaId);
 		const betaActor = actorNameFor(betaId);
 		check("the conversation names map to distinct actors", alphaActor !== betaActor, `${alphaActor} / ${betaActor}`);
@@ -316,23 +225,16 @@ async function main() {
 			(await actorState(alphaActor)) !== undefined && (await actorState(betaActor)) !== undefined,
 			`${alphaActor}=${await actorState(alphaActor)} ${betaActor}=${await actorState(betaActor)}`,
 		);
-		// The mock reply text repeats across turns, so stream isolation is
-		// checked on the conversation id every frame carries.
-		check(
-			"neither conversation sees the other's stream",
-			alpha.frames.every((frame) => frameOwner(frame) === alphaId) &&
-				beta.frames.every((frame) => frameOwner(frame) === betaId),
-		);
+		check("the replies name their own conversation", beta.body.conversation === betaId, beta.body.conversation);
 
 		const metrics = await (await fetch(`http://127.0.0.1:${port}/metrics`)).json();
-		check("turns are counted", (metrics.counters?.turns ?? 0) >= 4, JSON.stringify(metrics.counters));
+		check("turns are counted", (metrics.counters?.turns ?? 0) >= 3, JSON.stringify(metrics.counters));
 		check("resumed turns are counted", (metrics.counters?.resumed_turns ?? 0) >= 1, JSON.stringify(metrics.counters));
-		check("turn latency is recorded", (metrics.timings?.turn_millis?.count ?? 0) >= 4, JSON.stringify(metrics.timings));
-		check("first-token latency is recorded", (metrics.timings?.first_token_millis?.count ?? 0) >= 4);
+		check("turn latency is recorded", (metrics.timings?.turn_millis?.count ?? 0) >= 3, JSON.stringify(metrics.timings));
+		check("first-token latency is recorded", (metrics.timings?.first_token_millis?.count ?? 0) >= 3);
 		log(`resume latency p50=${metrics.timings?.resume_millis?.p50}ms p95=${metrics.timings?.resume_millis?.p95}ms`);
 		log(`turn latency p50=${metrics.timings?.turn_millis?.p50}ms p95=${metrics.timings?.turn_millis?.p95}ms`);
 	} finally {
-		for (const client of clients) client.socket.close();
 		gateway.kill("SIGTERM");
 		await new Promise((resolve) => gateway.once("exit", resolve));
 		// The gateway was this e2e's only suspend driver. Without a second

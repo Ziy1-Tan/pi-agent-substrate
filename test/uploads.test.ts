@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { MAX_UPLOAD_BYTES, saveUploads } from "../src/channel/uploads.js";
-import { WebChannel } from "../src/channel/web.js";
+import { TurnRecorder } from "../src/channel/recorder.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { createConversation } from "../src/gateway/conversations.js";
 import { StubBackend } from "./support/stub-backend.js";
@@ -19,15 +19,12 @@ async function tempRoot(t: test.TestContext): Promise<string> {
 test("an upload lands in the conversation's incoming directory and shows up in the prompt", async (t) => {
 	const root = await tempRoot(t);
 	const conversation = await createConversation(root, "local/chat");
-	const channel = new WebChannel({
-		conversationId: "local/chat",
-		filesDir: conversation.filesDir,
-	});
+	const channel = new TurnRecorder();
 	const gateway = new Gateway({ conversation, channel, backend: new StubBackend() });
 	await gateway.start();
 	t.after(() => gateway.stop());
 
-	const saved = await channel.saveUploads("msg-1", [
+	const saved = await saveUploads(conversation.filesDir, "msg-1", [
 		{ name: "notes.txt", mimeType: "text/plain", data: Buffer.from("attachment body").toString("base64") },
 	]);
 	assert.equal(saved.length, 1);
@@ -53,9 +50,8 @@ test("an upload lands in the conversation's incoming directory and shows up in t
 test("an upload cannot escape the conversation directory", async (t) => {
 	const root = await tempRoot(t);
 	const conversation = await createConversation(root, "local/chat");
-	const channel = new WebChannel({ conversationId: "local/chat", filesDir: conversation.filesDir });
 
-	const saved = await channel.saveUploads("msg-2", [
+	const saved = await saveUploads(conversation.filesDir, "msg-2", [
 		{ name: "../../escape.txt", data: Buffer.from("x").toString("base64") },
 	]);
 	assert.equal(saved[0]?.name, "escape.txt");

@@ -7,7 +7,7 @@ import { IdleLifecycle } from "../lifecycle/idle.js";
 import type { ActorControl, ActorRef } from "../lifecycle/types.js";
 import { Metrics } from "../metrics.js";
 import { WebSocketTransport } from "../transport/websocket.js";
-import { WebChannel } from "../channel/web.js";
+import { TurnRecorder } from "../channel/recorder.js";
 
 export interface ConversationSpec {
 	conversationId: string;
@@ -33,8 +33,9 @@ export interface ManagerOptions {
 	/** Replaces the actor backend; tests use it to run without a cluster. */
 	createBackend?: (conversation: ResolvedConversation) => AgentBackend;
 	/**
-	 * Supplies the channel a turn's reply goes to. Without it replies are only
-	 * recorded as events on the conversation's WebSocket.
+	 * Supplies the channel a turn's reply goes to. Without it the reply is
+	 * recorded on the conversation's turn recorder, which `POST /messages`
+	 * reads back.
 	 */
 	createChannel?: (conversation: ResolvedConversation) => Channel | undefined;
 	log?: (message: string) => void;
@@ -43,9 +44,9 @@ export interface ManagerOptions {
 export interface ManagedConversation {
 	conversation: ResolvedConversation;
 	gateway: Gateway;
-	/** Sequenced event log for browser clients, always present. */
-	channel: WebChannel;
-	/** Where the settled reply is delivered: the web log, Telegram, or a pipe. */
+	/** Records the settled turn for `POST /messages`, always present. */
+	recorder: TurnRecorder;
+	/** Where the settled reply is delivered: the recorder, Telegram, or a pipe. */
 	outbound: Channel;
 	lifecycle: IdleLifecycle;
 	actor: ActorRef;
@@ -85,9 +86,9 @@ export class GatewayManager {
 		return this.metrics;
 	}
 
-	/** The conversation's channel, once it is open. */
-	get(conversationId: string): WebChannel | undefined {
-		return this.entries.get(conversationId)?.channel;
+	/** The conversation's turn recorder, once it is open. */
+	get(conversationId: string): TurnRecorder | undefined {
+		return this.entries.get(conversationId)?.recorder;
 	}
 
 	/** Opens a conversation on first use; concurrent callers share the work. */
@@ -140,11 +141,8 @@ export class GatewayManager {
 		await this.options.control.ensure({ atespace: spec.atespace, name: actor.name });
 		await this.options.provision?.(actor);
 
-		const channel = new WebChannel({
-			conversationId: spec.conversationId,
-			filesDir: conversation.filesDir,
-		});
-		const outbound = this.options.createChannel?.(conversation) ?? channel;
+		const recorder = new TurnRecorder();
+		const outbound = this.options.createChannel?.(conversation) ?? recorder;
 		const transport = new WebSocketTransport({
 			url: this.options.actorUrl,
 			targetActor: `${actor.atespace}/${actor.name}`,
@@ -162,7 +160,6 @@ export class GatewayManager {
 				if (event.reason === "suspend_requested") this.metrics.increment("suspends");
 				if (event.reason === "idle_elapsed") this.metrics.increment("idle_windows");
 				if (event.reason === "suspend_failed") this.metrics.increment("suspend_failures");
-				channel.recordState(event.reason);
 			},
 		});
 
@@ -182,12 +179,11 @@ export class GatewayManager {
 					// Resume latency is what a user feels: prompt to first token.
 					this.metrics.observe("resume_millis", report.firstTokenMillis ?? report.turnMillis);
 				}
-				channel.recordState("turn_settled");
 			},
 		});
 		await gateway.start();
 
-		const entry: ManagedConversation = { conversation, gateway, channel, outbound, lifecycle, actor };
+		const entry: ManagedConversation = { conversation, gateway, recorder, outbound, lifecycle, actor };
 		this.entries.set(spec.conversationId, entry);
 		log(`opened ${spec.conversationId} on ${actor.atespace}/${actor.name}`);
 		return entry;

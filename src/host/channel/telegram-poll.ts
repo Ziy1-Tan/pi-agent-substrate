@@ -1,4 +1,4 @@
-import type { AttachmentInput, InboundMessageInput } from "../../../third_party/pi-chat/types.js";
+import type { AttachmentInput, InboundMessage } from "../conversation/records.js";
 import type { GatewayManager, ConversationSpec } from "../manager.js";
 import { saveBytes } from "./files.js";
 
@@ -103,15 +103,12 @@ export class TelegramPoll {
 			return;
 		}
 
-		const input: InboundMessageInput = {
+		const input: InboundMessage = {
 			userId: String(message.from?.id ?? chatId),
 			userName: message.from?.username ?? message.from?.first_name ?? message.chat.title ?? chatId,
 			text,
 			messageId: `telegram-${message.message_id}`,
 			attachments,
-			// A Telegram chat is a DM only when it is a private chat; in a group
-			// the bot is addressed explicitly.
-			mentionedBot: message.chat.type !== "private",
 		};
 		await this.manager.receive(conversationId, input);
 	}

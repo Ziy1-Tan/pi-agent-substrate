@@ -1,6 +1,6 @@
 # Always-on Pi agents on Agent Substrate
 
-Reuse pi-chat's channels and conversation state, always-on-agent's idle
+Combine a conversation log derived from pi-chat's, always-on-agent's idle
 suspension policy, and Substrate's suspendable actors to run `pi --mode rpc`
 inside an actor: a Pi agent that stays connected but only computes on demand.
 
@@ -22,8 +22,8 @@ and re-align state.
 
 | Layer | Role | Source |
 |---|---|---|
-| Channel | Where the human speaks | pi-chat's conversation runtime and renderer; the curl and Telegram adapters live here |
-| Gateway | Connection keep-alive and lifecycle decisions | always-on-agent's `idle-suspender` idea |
+| Channel | Where the human speaks | The curl and Telegram adapters in `src/host/channel/` |
+| Gateway | Conversation log, delivery, and lifecycle decisions | The log derives from pi-chat's runtime; `src/host/substrate/` follows always-on-agent's provisioner and idle-suspender split |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
 | Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
 
@@ -58,17 +58,18 @@ with no work in flight, the gateway suspends it again.
 ## Components
 
 The gateway is a standalone process that does not run the agent: channel
-adapters, the conversation runtime (queue, session lock, `channel.jsonl`,
-attachments), conversation mapping (actor name from conversation id,
-create-if-absent), the RPC relay, idle suspension, and the control-plane client.
+adapters (`channel/`), the conversation store (`conversation/`: lock,
+`channel.jsonl`, attachments), the RPC relay (`backend.ts`, `websocket.ts`),
+and everything it asks of Substrate (`substrate/`: actor name from
+conversation id, create-if-absent, egress policy, idle suspension, and the
+control-plane client).
 
 The actor image is a WebSocket-to-stdio bridge in front of
 `pi --mode rpc --session-dir /workspace/.pi`, on a pinned Node base image, with
 `/workspace` declared as a durableDir for memory, skills, code, and session
 files.
 
-pi-chat's channel, rendering, config, and secrets modules and the Substrate core
-are not modified.
+The Substrate core is not modified.
 
 ## Core models
 

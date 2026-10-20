@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
-import type { AttachmentInput } from "../../../third_party/pi-chat/types.js";
+import type { AttachmentInput } from "../conversation/records.js";
 
 /** One uploaded file as a client sends it. */
 export interface UploadInput {

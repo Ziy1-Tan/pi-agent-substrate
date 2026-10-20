@@ -1,4 +1,4 @@
-import type { InboundMessageInput, ResolvedConversation } from "../../third_party/pi-chat/types.js";
+import type { Conversation } from "./conversation/store.js";
 import type { IdleLifecycle } from "./substrate/idle.js";
 
 export interface OutboundDelivery {
@@ -64,7 +64,7 @@ export interface TurnReport {
 }
 
 export interface GatewayOptions {
-	conversation: ResolvedConversation;
+	conversation: Conversation;
 	channel: Channel;
 	backend: AgentBackend;
 	/**
@@ -77,4 +77,3 @@ export interface GatewayOptions {
 	ownerId?: string;
 }
 
-export type { InboundMessageInput };

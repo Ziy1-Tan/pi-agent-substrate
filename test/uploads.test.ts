@@ -7,7 +7,7 @@ import test from "node:test";
 import { MAX_UPLOAD_BYTES, saveUploads } from "../src/host/channel/files.js";
 import { NullChannel } from "../src/host/null-channel.js";
 import { Gateway } from "../src/host/gateway.js";
-import { createConversation } from "../src/host/conversations.js";
+import { createConversation } from "../src/host/conversation/store.js";
 import { StubBackend } from "./support/stub-backend.js";
 
 async function tempRoot(t: test.TestContext): Promise<string> {

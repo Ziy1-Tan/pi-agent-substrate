@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { Gateway } from "../src/host/gateway.js";
-import { createConversation } from "../src/host/conversations.js";
+import { createConversation } from "../src/host/conversation/store.js";
 import { Metrics } from "../src/metrics.js";
 import { StubBackend } from "./support/stub-backend.js";
 import { TestChannel } from "./support/test-channel.js";

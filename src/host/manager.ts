@@ -1,7 +1,7 @@
 import { PiBackend } from "./backend.js";
-import type { ResolvedConversation } from "../../third_party/pi-chat/types.js";
-import type { AgentBackend, AgentResponse, Channel, InboundMessageInput } from "./types.js";
-import { createConversation } from "./conversations.js";
+import type { InboundMessage } from "./conversation/records.js";
+import { createConversation, type Conversation } from "./conversation/store.js";
+import type { AgentBackend, AgentResponse, Channel } from "./types.js";
 import { Gateway } from "./gateway.js";
 import { NullChannel } from "./null-channel.js";
 import { IdleLifecycle } from "./substrate/idle.js";
@@ -23,17 +23,17 @@ export interface ManagerOptions {
 	actors: ActorProvisioner;
 	metrics?: Metrics;
 	/** Replaces the actor backend; tests use it to run without a cluster. */
-	createBackend?: (conversation: ResolvedConversation) => AgentBackend;
+	createBackend?: (conversation: Conversation) => AgentBackend;
 	/**
 	 * Supplies the channel a turn's reply goes to. Without it the reply is only
 	 * returned from `receive`, which is what `POST /messages` does.
 	 */
-	createChannel?: (conversation: ResolvedConversation) => Channel | undefined;
+	createChannel?: (conversation: Conversation) => Channel | undefined;
 	log?: (message: string) => void;
 }
 
 export interface ManagedConversation {
-	conversation: ResolvedConversation;
+	conversation: Conversation;
 	gateway: Gateway;
 	/** Where the settled reply is delivered; undefined means the caller's return. */
 	outbound: Channel | undefined;
@@ -86,7 +86,7 @@ export class GatewayManager {
 	 * reaches a chat adapter when the conversation has one, and either way it is
 	 * returned here.
 	 */
-	async receive(conversationId: string, input: InboundMessageInput): Promise<AgentResponse> {
+	async receive(conversationId: string, input: InboundMessage): Promise<AgentResponse> {
 		const entry = this.entries.get(conversationId);
 		if (!entry) throw new Error(`unknown conversation: ${conversationId}`);
 		return entry.gateway.receive(input);

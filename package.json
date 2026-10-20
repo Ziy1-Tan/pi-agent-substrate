@@ -12,7 +12,7 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "npm run build && NODE_ENV=test node --test dist/test/gateway.test.js dist/test/gateway-lifecycle.test.js dist/test/idle-lifecycle.test.js dist/test/bridge-lines.test.js dist/test/bridge.test.js dist/test/bridge-e2e.test.js dist/test/actor-transport.test.js dist/test/manager.test.js dist/test/uploads.test.js dist/test/metrics.test.js dist/test/telegram.test.js dist/test/entry-points.test.js"
+		"test": "npm run build && NODE_ENV=test node --test dist/test/gateway.test.js dist/test/conversation-store.test.js dist/test/gateway-lifecycle.test.js dist/test/idle-lifecycle.test.js dist/test/bridge-lines.test.js dist/test/bridge.test.js dist/test/bridge-e2e.test.js dist/test/actor-transport.test.js dist/test/manager.test.js dist/test/uploads.test.js dist/test/metrics.test.js dist/test/telegram.test.js dist/test/entry-points.test.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",

@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import { PiBackend } from "../src/host/backend.js";
 import { startBridge, type Bridge } from "../src/sandbox/bridge.js";
-import { createConversation } from "../src/host/conversations.js";
+import { createConversation } from "../src/host/conversation/store.js";
 import { Gateway } from "../src/host/gateway.js";
 import { WebSocketTransport } from "../src/host/websocket.js";
 import { resolvePiBin, startMockLlm, writePiConfig } from "./support/bridge-harness.js";

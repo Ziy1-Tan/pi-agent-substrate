@@ -14,5 +14,5 @@
 		"types": ["node"],
 		"sourceMap": true
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts", "third_party/**/*.ts"]
+	"include": ["src/**/*.ts", "test/**/*.ts"]
 }

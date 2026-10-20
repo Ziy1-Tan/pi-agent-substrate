@@ -1,8 +1,6 @@
-import { randomUUID } from "node:crypto";
-
-import { ConversationRuntime } from "../../third_party/pi-chat/src/runtime.js";
-import type { JobDeliveryState, PendingJob } from "../../third_party/pi-chat/types.js";
-import type { AgentResponse, GatewayOptions, InboundMessageInput } from "./types.js";
+import { ConversationStore, lockOwner } from "./conversation/store.js";
+import type { InboundMessage, JobState, PendingJob } from "./conversation/records.js";
+import type { AgentResponse, GatewayOptions } from "./types.js";
 
 /** Thrown by an injected hook to stop the gateway like a process crash would. */
 export class GatewayAbort extends Error {
@@ -29,7 +27,7 @@ interface TurnWaiter {
  */
 export class Gateway {
 	private readonly options: GatewayOptions;
-	private runtime: ConversationRuntime | undefined;
+	private store: ConversationStore | undefined;
 	private queue: PendingJob[] = [];
 	private active: PendingJob | undefined;
 	private wake: (() => void) | undefined;
@@ -40,8 +38,6 @@ export class Gateway {
 	 * happened to finish last.
 	 */
 	private readonly jobWaiters = new Map<string, TurnWaiter>();
-	/** Serializes `ingestInbound`; see `receive`. */
-	private ingesting: Promise<void> = Promise.resolve();
 	private stopped = false;
 	private abortError: Error | undefined;
 	private started = false;
@@ -53,12 +49,9 @@ export class Gateway {
 
 	async start(): Promise<void> {
 		if (this.started) throw new Error("gateway is already started");
-		const ownerId = this.options.ownerId ?? `pi-chat-${process.pid}-${randomUUID()}`;
-		this.runtime = await ConversationRuntime.connect(this.options.conversation, ownerId);
-		// Do not replay history that predates this process. Newly ingested
-		// messages get fresh record ids and still trigger.
-		this.runtime.armAfterCurrentTail();
-		this.queue = this.runtime.listUnfinishedJobs();
+		this.store = await ConversationStore.open(this.options.conversation, this.options.ownerId ?? lockOwner());
+		// The log decides what is unfinished; this process only schedules it.
+		this.queue = this.store.unfinishedJobs();
 		this.started = true;
 		this.loop = this.processLoop();
 		this.maybeSettle();
@@ -69,38 +62,17 @@ export class Gateway {
 	 * callers on one conversation therefore get their own replies, not the last
 	 * one to settle.
 	 */
-	async receive(input: InboundMessageInput): Promise<AgentResponse> {
+	async receive(input: InboundMessage): Promise<AgentResponse> {
 		this.ensureRunning();
-		const runtime = this.runtime;
-		if (!runtime) throw new Error("gateway is not running");
-		// Ingesting is not reentrant: the runtime decides whether to queue a
-		// trigger by comparing against the last queued one, so two interleaved
-		// ingests drop the earlier message. One at a time, in arrival order.
-		// The waiter is registered inside the same section the job is queued in:
-		// a turn can finish before `await` resumes here, and a waiter added
-		// afterwards would never be called. The section hands back the reply
-		// rather than awaiting it, so the next message is ingested while this
-		// turn is still running.
-		const queued = this.ingesting.then(async () => {
-			const { queuedJob } = await runtime.ingestInbound(input);
-			if (!queuedJob) {
-				// The runtime declined the message (another bot, a channel that
-				// requires a mention); it is recorded but triggers no turn.
-				return { reply: Promise.resolve<AgentResponse>({ text: "" }) };
-			}
-			const reply = new Promise<AgentResponse>((resolve, reject) => {
-				this.jobWaiters.set(queuedJob.jobId, { resolve, reject });
-			});
-			this.queue.push(queuedJob);
-			this.signalWork();
-			this.maybeSettle();
-			return { reply };
+		const store = this.store;
+		if (!store) throw new Error("gateway is not running");
+		const job = await store.appendInbound(input);
+		const reply = new Promise<AgentResponse>((resolve, reject) => {
+			this.jobWaiters.set(job.jobId, { resolve, reject });
 		});
-		this.ingesting = queued.then(
-			() => undefined,
-			() => undefined,
-		);
-		return (await queued).reply;
+		this.queue.push(job);
+		this.signalWork();
+		return reply;
 	}
 
 	/** Resolves once the queue is empty; rejects if an injected fault fired. */
@@ -114,8 +86,8 @@ export class Gateway {
 		this.stopped = true;
 		this.signalWork();
 		await this.loop;
-		await this.runtime?.disconnect();
-		this.runtime = undefined;
+		await this.store?.close();
+		this.store = undefined;
 		this.started = false;
 	}
 
@@ -141,11 +113,11 @@ export class Gateway {
 					break;
 				}
 				const message = error instanceof Error ? error.message : String(error);
-				await this.runtime?.recordJobFailed(job, message);
+				await this.store?.recordFailed(job, message);
 				// A crash between recording the outbound and marking the job done
 				// still delivered the reply; the recovery path finishes that job,
 				// so the user must not see a second, contradictory message.
-				const delivered = this.runtime?.getJobState(job.jobId).outbound !== undefined;
+				const delivered = this.store?.jobState(job.jobId).outbound !== undefined;
 				if (!delivered) {
 					await this.options.channel
 						.sendError?.({ deliveryId: `error-${job.jobId}`, text: message })
@@ -161,9 +133,9 @@ export class Gateway {
 	}
 
 	private async runJob(job: PendingJob): Promise<void> {
-		const runtime = this.runtime;
-		if (!runtime) throw new Error("gateway is not running");
-		const state = runtime.getJobState(job.jobId);
+		const store = this.store;
+		if (!store) throw new Error("gateway is not running");
+		const state = store.jobState(job.jobId);
 		if (state.completed || state.failed) {
 			this.settleJob(job.jobId, { text: "" });
 			return;
@@ -171,7 +143,7 @@ export class Gateway {
 		if (state.outbound) {
 			// The response was recorded before the restart, so acknowledge the
 			// turn without calling the backend or the channel again.
-			await runtime.acknowledgeJobCompleted(job, state.outbound.recordId);
+			await store.recordCompleted(job, state.outbound.recordId);
 			this.settleJob(job.jobId, { text: state.outbound.text });
 			return;
 		}
@@ -193,23 +165,22 @@ export class Gateway {
 		// turn that failed after `turnStarted` would otherwise leave the actor
 		// ACTIVE for good, because the idle timer only arms from GRACE.
 		try {
-			await this.runStartedTurn(runtime, job, state, resumed);
+			await this.runStartedTurn(store, job, state, resumed);
 		} finally {
 			this.options.lifecycle?.turnSettled();
 		}
 	}
 
 	private async runStartedTurn(
-		runtime: ConversationRuntime,
+		store: ConversationStore,
 		job: PendingJob,
-		state: JobDeliveryState,
+		state: JobState,
 		resumed: boolean,
 	): Promise<void> {
-		// A retry after a crash keeps the original request id.
-		const requestId = state.dispatched.at(-1)?.requestId ?? job.jobId;
 		await this.options.hooks?.beforeSubmit?.();
-		await runtime.appendJobDispatched(job, requestId);
-		const dispatch = runtime.beginJob(job);
+		// A retry after a crash keeps the original request id.
+		const requestId = await store.recordDispatched(job, state.requestId ?? job.jobId);
+		const dispatch = store.promptFor(job);
 
 		let streamed = "";
 		let previews: Promise<void> = Promise.resolve();
@@ -239,7 +210,7 @@ export class Gateway {
 			// The actor reached Pi, Pi reached the provider, and the provider
 			// said no. Recording an empty outbound would make the next turn look
 			// like a successful silent answer.
-			await runtime.recordJobFailed(job, response.error);
+			await store.recordFailed(job, response.error);
 			await this.options.channel.sendError?.({ deliveryId: requestId, text: response.error });
 		} else {
 			const remoteMessageId = await this.options.channel.send({
@@ -249,9 +220,9 @@ export class Gateway {
 			});
 			await this.options.hooks?.afterChannelSend?.();
 
-			const outbound = await runtime.recordOutbound(response.text, remoteMessageId);
+			const outbound = await store.recordOutbound(job, response.text, remoteMessageId);
 			await this.options.hooks?.afterOutbound?.();
-			await runtime.recordJobCompleted(outbound?.recordId);
+			await store.recordCompleted(job, outbound?.recordId);
 		}
 		this.options.onTurn?.({
 			turnMillis: Date.now() - startedAt,

@@ -1,13 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { ConversationRuntime } from "../../third_party/pi-chat/src/runtime.js";
-import type {
-	ChatLogRecord,
-	ConversationStatus,
-	JobDeliveryState,
-	PendingJob,
-} from "../../third_party/pi-chat/types.js";
-import type { Checkpoint, GatewayOptions, InboundMessageInput } from "./types.js";
+import type { JobDeliveryState, PendingJob } from "../../third_party/pi-chat/types.js";
+import type { AgentResponse, GatewayOptions, InboundMessageInput } from "./types.js";
 
 /** Thrown by an injected hook to stop the gateway like a process crash would. */
 export class GatewayAbort extends Error {
@@ -22,6 +17,12 @@ interface IdleWaiter {
 	reject: (error: Error) => void;
 }
 
+/** The caller of `receive`, waiting for its own turn rather than the queue. */
+interface TurnWaiter {
+	resolve: (response: AgentResponse) => void;
+	reject: (error: Error) => void;
+}
+
 /**
  * One gateway instance owns one conversation. All delivery state lives in the
  * conversation's channel.jsonl, so a new instance can resume after a restart.
@@ -33,6 +34,14 @@ export class Gateway {
 	private active: PendingJob | undefined;
 	private wake: (() => void) | undefined;
 	private idleWaiters: IdleWaiter[] = [];
+	/**
+	 * Resolvers keyed by job id. A caller that enqueued a message waits for its
+	 * own job; waiting for the queue to drain would hand back whichever turn
+	 * happened to finish last.
+	 */
+	private readonly jobWaiters = new Map<string, TurnWaiter>();
+	/** Serializes `ingestInbound`; see `receive`. */
+	private ingesting: Promise<void> = Promise.resolve();
 	private stopped = false;
 	private abortError: Error | undefined;
 	private started = false;
@@ -55,41 +64,43 @@ export class Gateway {
 		this.maybeSettle();
 	}
 
-	async receive(input: InboundMessageInput, checkpoint?: Checkpoint): Promise<void> {
+	/**
+	 * Queues one message and resolves with that message's own turn result. Two
+	 * callers on one conversation therefore get their own replies, not the last
+	 * one to settle.
+	 */
+	async receive(input: InboundMessageInput): Promise<AgentResponse> {
 		this.ensureRunning();
 		const runtime = this.runtime;
 		if (!runtime) throw new Error("gateway is not running");
-		const { queuedJob } = await runtime.ingestInbound(input, checkpoint);
-		if (queuedJob) this.queue.push(queuedJob);
-		this.signalWork();
-		this.maybeSettle();
-	}
-
-	/** Queue depth and log position, for a client that just reconnected. */
-	status(): ConversationStatus | undefined {
-		if (!this.runtime) return undefined;
-		return this.runtime.getStatus();
-	}
-
-	/** Recent inbound and outbound records, oldest first. */
-	history(limit = 20): ChatLogRecord[] {
-		return this.runtime?.findHistory({ limit }) ?? [];
-	}
-
-	/** Cancels the turn in flight, if any. Queued turns are unaffected. */
-	cancelActive(): boolean {
-		const job = this.active;
-		if (!job || !this.runtime) return false;
-		const requestId = this.runtime.getJobState(job.jobId).dispatched.at(-1)?.requestId ?? job.jobId;
-		if (!this.options.backend.cancel) return false;
-		this.options.backend.cancel(requestId);
-		return true;
-	}
-
-	/** Starts a fresh Pi session for the next turn. */
-	async newSession(): Promise<void> {
-		this.ensureRunning();
-		await this.options.backend.newSession?.();
+		// Ingesting is not reentrant: the runtime decides whether to queue a
+		// trigger by comparing against the last queued one, so two interleaved
+		// ingests drop the earlier message. One at a time, in arrival order.
+		// The waiter is registered inside the same section the job is queued in:
+		// a turn can finish before `await` resumes here, and a waiter added
+		// afterwards would never be called. The section hands back the reply
+		// rather than awaiting it, so the next message is ingested while this
+		// turn is still running.
+		const queued = this.ingesting.then(async () => {
+			const { queuedJob } = await runtime.ingestInbound(input);
+			if (!queuedJob) {
+				// The runtime declined the message (another bot, a channel that
+				// requires a mention); it is recorded but triggers no turn.
+				return { reply: Promise.resolve<AgentResponse>({ text: "" }) };
+			}
+			const reply = new Promise<AgentResponse>((resolve, reject) => {
+				this.jobWaiters.set(queuedJob.jobId, { resolve, reject });
+			});
+			this.queue.push(queuedJob);
+			this.signalWork();
+			this.maybeSettle();
+			return { reply };
+		});
+		this.ingesting = queued.then(
+			() => undefined,
+			() => undefined,
+		);
+		return (await queued).reply;
 	}
 
 	/** Resolves once the queue is empty; rejects if an injected fault fired. */
@@ -126,6 +137,7 @@ export class Gateway {
 				if (error instanceof GatewayAbort) {
 					this.abortError = error;
 					this.stopped = true;
+					this.failWaiters(error);
 					break;
 				}
 				const message = error instanceof Error ? error.message : String(error);
@@ -139,6 +151,7 @@ export class Gateway {
 						.sendError?.({ deliveryId: `error-${job.jobId}`, text: message })
 						.catch(() => undefined);
 				}
+				this.settleJob(job.jobId, { text: "", error: message });
 			} finally {
 				this.active = undefined;
 				this.maybeSettle();
@@ -151,11 +164,15 @@ export class Gateway {
 		const runtime = this.runtime;
 		if (!runtime) throw new Error("gateway is not running");
 		const state = runtime.getJobState(job.jobId);
-		if (state.completed || state.failed) return;
+		if (state.completed || state.failed) {
+			this.settleJob(job.jobId, { text: "" });
+			return;
+		}
 		if (state.outbound) {
 			// The response was recorded before the restart, so acknowledge the
 			// turn without calling the backend or the channel again.
 			await runtime.acknowledgeJobCompleted(job, state.outbound.recordId);
+			this.settleJob(job.jobId, { text: state.outbound.text });
 			return;
 		}
 
@@ -237,11 +254,11 @@ export class Gateway {
 			await runtime.recordJobCompleted(outbound?.recordId);
 		}
 		this.options.onTurn?.({
-			requestId,
 			turnMillis: Date.now() - startedAt,
 			firstTokenMillis,
 			resumed,
 		});
+		this.settleJob(job.jobId, response);
 	}
 
 	private waitForWork(): Promise<void> {
@@ -254,6 +271,19 @@ export class Gateway {
 		const wake = this.wake;
 		this.wake = undefined;
 		wake?.();
+	}
+
+	/** Hands one turn's result to the caller that queued it. */
+	private settleJob(jobId: string, response: AgentResponse): void {
+		const waiter = this.jobWaiters.get(jobId);
+		if (!waiter) return;
+		this.jobWaiters.delete(jobId);
+		waiter.resolve(response);
+	}
+
+	private failWaiters(error: Error): void {
+		for (const waiter of this.jobWaiters.values()) waiter.reject(error);
+		this.jobWaiters.clear();
 	}
 
 	private maybeSettle(): void {

@@ -1,13 +1,13 @@
-import { PiBackend } from "../backend/pi.js";
+import { PiBackend } from "../actor/backend.js";
 import type { ResolvedConversation } from "../../third_party/pi-chat/types.js";
-import type { AgentBackend, Channel, InboundMessageInput } from "./types.js";
+import type { AgentBackend, AgentResponse, Channel, InboundMessageInput } from "./types.js";
 import { createConversation } from "./conversations.js";
 import { Gateway } from "./gateway.js";
+import { NullChannel } from "./null-channel.js";
 import { IdleLifecycle } from "../lifecycle/idle.js";
-import type { ActorControl, ActorRef } from "../lifecycle/types.js";
+import type { ActorControl, ActorRef } from "../lifecycle/control.js";
 import { Metrics } from "../metrics.js";
-import { WebSocketTransport } from "../transport/websocket.js";
-import { TurnRecorder } from "../channel/recorder.js";
+import { WebSocketTransport } from "../actor/websocket.js";
 
 export interface ConversationSpec {
 	conversationId: string;
@@ -33,9 +33,8 @@ export interface ManagerOptions {
 	/** Replaces the actor backend; tests use it to run without a cluster. */
 	createBackend?: (conversation: ResolvedConversation) => AgentBackend;
 	/**
-	 * Supplies the channel a turn's reply goes to. Without it the reply is
-	 * recorded on the conversation's turn recorder, which `POST /messages`
-	 * reads back.
+	 * Supplies the channel a turn's reply goes to. Without it the reply is only
+	 * returned from `receive`, which is what `POST /messages` does.
 	 */
 	createChannel?: (conversation: ResolvedConversation) => Channel | undefined;
 	log?: (message: string) => void;
@@ -44,10 +43,8 @@ export interface ManagerOptions {
 export interface ManagedConversation {
 	conversation: ResolvedConversation;
 	gateway: Gateway;
-	/** Records the settled turn for `POST /messages`, always present. */
-	recorder: TurnRecorder;
-	/** Where the settled reply is delivered: the recorder, Telegram, or a pipe. */
-	outbound: Channel;
+	/** Where the settled reply is delivered; undefined means the caller's return. */
+	outbound: Channel | undefined;
 	lifecycle: IdleLifecycle;
 	actor: ActorRef;
 }
@@ -86,9 +83,9 @@ export class GatewayManager {
 		return this.metrics;
 	}
 
-	/** The conversation's turn recorder, once it is open. */
-	get(conversationId: string): TurnRecorder | undefined {
-		return this.entries.get(conversationId)?.recorder;
+	/** The conversation's outbound channel, once it is open. */
+	get(conversationId: string): Channel | undefined {
+		return this.entries.get(conversationId)?.outbound;
 	}
 
 	/** Opens a conversation on first use; concurrent callers share the work. */
@@ -102,23 +99,15 @@ export class GatewayManager {
 		return created;
 	}
 
-	async receive(conversationId: string, input: InboundMessageInput): Promise<void> {
+	/**
+	 * Queues one message and resolves with that message's own reply. The reply
+	 * reaches a chat adapter when the conversation has one, and either way it is
+	 * returned here.
+	 */
+	async receive(conversationId: string, input: InboundMessageInput): Promise<AgentResponse> {
 		const entry = this.entries.get(conversationId);
 		if (!entry) throw new Error(`unknown conversation: ${conversationId}`);
-		await entry.gateway.receive(input);
-		await entry.gateway.waitForIdle();
-	}
-
-	/** Cancels the conversation's turn in flight. */
-	stop(conversationId: string): boolean {
-		return this.entries.get(conversationId)?.gateway.cancelActive() ?? false;
-	}
-
-	/** Discards the Pi session; the conversation log and workspace stay. */
-	async reset(conversationId: string): Promise<void> {
-		const entry = this.entries.get(conversationId);
-		if (!entry) throw new Error(`unknown conversation: ${conversationId}`);
-		await entry.gateway.newSession();
+		return entry.gateway.receive(input);
 	}
 
 	async close(): Promise<void> {
@@ -141,8 +130,7 @@ export class GatewayManager {
 		await this.options.control.ensure({ atespace: spec.atespace, name: actor.name });
 		await this.options.provision?.(actor);
 
-		const recorder = new TurnRecorder();
-		const outbound = this.options.createChannel?.(conversation) ?? recorder;
+		const outbound = this.options.createChannel?.(conversation);
 		const transport = new WebSocketTransport({
 			url: this.options.actorUrl,
 			targetActor: `${actor.atespace}/${actor.name}`,
@@ -165,7 +153,7 @@ export class GatewayManager {
 
 		const gateway = new Gateway({
 			conversation,
-			channel: outbound,
+			channel: outbound ?? new NullChannel(),
 			backend,
 			lifecycle,
 			onTurn: (report) => {
@@ -183,7 +171,7 @@ export class GatewayManager {
 		});
 		await gateway.start();
 
-		const entry: ManagedConversation = { conversation, gateway, recorder, outbound, lifecycle, actor };
+		const entry: ManagedConversation = { conversation, gateway, outbound, lifecycle, actor };
 		this.entries.set(spec.conversationId, entry);
 		log(`opened ${spec.conversationId} on ${actor.atespace}/${actor.name}`);
 		return entry;

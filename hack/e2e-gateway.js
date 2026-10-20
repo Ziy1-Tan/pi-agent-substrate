@@ -17,19 +17,18 @@
  *      message resumes it; the resume latency lands in /metrics
  *   4. a second conversation gets a different actor and its own log
  */
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
-const atespace = process.env.PI_ATESPACE ?? "pi-agents";
+import { actorNameFor, actorState as readActorState, ateClient, createChecks, removeActor, waitFor } from "./e2e-lib.js";
+
+const { atespace, ate } = ateClient();
 const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 12);
 const port = Number(process.env.PI_HTTP_PORT ?? 8899);
 const actorPrefix = process.env.PI_ACTOR_PREFIX ?? "pi-";
-const kubectlAte = process.env.KUBECTL_ATE ?? "kubectl-ate";
-const kubeContext = process.env.KUBE_CONTEXT;
 /**
  * The template the gateway creates actors from. Without an explicit value the
  * gateway falls back to `pi-actor`, which is the manual template, not the one
@@ -39,83 +38,11 @@ const kubeContext = process.env.KUBE_CONTEXT;
 const actorTemplate = process.env.PI_ACTOR_TEMPLATE ?? "pi-e2e";
 const conversations = (process.env.PI_E2E_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
 
-/** Mirrors `actorNameFor` in the gateway; the e2e checks the mapping it relies on. */
-function actorNameFor(conversationId) {
-	const sanitized = conversationId
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 40);
-	return `${actorPrefix}${sanitized || "conversation"}`;
-}
-
 const log = (message) => console.log(`[gateway-e2e] ${message}`);
-const checks = [];
-function check(name, condition, detail = "") {
-	checks.push({ name, ok: Boolean(condition) });
-	if (condition) log(`PASS ${name}`);
-	else log(`FAIL ${name}${detail ? `: ${detail}` : ""}`);
-}
-
-/** Actor state, or undefined when the actor does not exist. */
-async function actorState(name) {
-	const args = [
-		kubectlAte,
-		...(kubeContext ? ["--context", kubeContext] : []),
-		"get",
-		"actors",
-		name,
-		"-a",
-		atespace,
-		"-o",
-		"json",
-	];
-	try {
-		const { stdout } = await promisify(execFile)(args[0], args.slice(1), { maxBuffer: 16 * 1024 * 1024 });
-		const parsed = JSON.parse(stdout);
-		const entry = Array.isArray(parsed.actors) ? parsed.actors[0] : parsed;
-		return entry?.status?.state ?? "UNKNOWN";
-	} catch {
-		return undefined;
-	}
-}
-
-/**
- * Removes an actor an earlier run left behind. It is bound to the template of
- * whichever run created it, and a rerun rebuilds that template, so the old
- * actor can no longer resume; keeping it turns the next run into a 503 from
- * the router rather than a clean start.
- */
-async function removeActor(name) {
-	if ((await actorState(name)) === undefined) return;
-	const args = [
-		kubectlAte,
-		...(kubeContext ? ["--context", kubeContext] : []),
-		"delete",
-		"actor",
-		name,
-		"-a",
-		atespace,
-		"--any-state",
-	];
-	try {
-		await promisify(execFile)(args[0], args.slice(1), { maxBuffer: 16 * 1024 * 1024 });
-		log(`removed actor ${name}`);
-	} catch (error) {
-		log(`could not remove actor ${name}: ${error instanceof Error ? error.message : String(error)}`);
-	}
-}
-
-async function waitFor(getter, predicate, timeoutMs, label) {
-	const deadline = Date.now() + timeoutMs;
-	let last;
-	while (Date.now() < deadline) {
-		last = await getter();
-		if (predicate(last)) return last;
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-	throw new Error(`timed out waiting for ${label}: ${JSON.stringify(last)}`);
-}
+const { check, checks } = createChecks(log);
+const client = { ate, atespace };
+const actorState = (name) => readActorState(client, name);
+const dropActor = (name) => removeActor(client, name, log);
 
 /** One turn through the HTTP entry point; returns the parsed response body. */
 async function post(conversationId, text) {
@@ -131,7 +58,7 @@ async function main() {
 	// Both conversations get an actor on first use. Clear whatever an earlier
 	// run left so this run tests the template it was given; the same cleanup
 	// runs after the checks, so a passing run leaves nothing behind either.
-	for (const conversationId of conversations) await removeActor(actorNameFor(conversationId));
+	for (const conversationId of conversations) await dropActor(actorNameFor(conversationId, actorPrefix));
 
 	const dataDir = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
 	const gateway = spawn(process.execPath, ["dist/src/bin/gateway.js"], {
@@ -178,8 +105,8 @@ async function main() {
 		);
 		check(
 			"the conversation is bound to a deterministic actor",
-			(await actorState(actorNameFor(alphaId))) !== undefined,
-			actorNameFor(alphaId),
+			(await actorState(actorNameFor(alphaId, actorPrefix))) !== undefined,
+			actorNameFor(alphaId, actorPrefix),
 		);
 
 		// The idle lifecycle owns the actor now: no suspend command here.
@@ -195,7 +122,7 @@ async function main() {
 		// The lifecycle reports the suspend as soon as the control plane
 		// accepts it; the worker is only free once the actor is actually down.
 		await waitFor(
-			() => actorState(actorNameFor(alphaId)),
+			() => actorState(actorNameFor(alphaId, actorPrefix)),
 			(state) => state === "ACTOR_STATE_SUSPENDED",
 			(idleSeconds + 40) * 1000,
 			"alpha to leave its worker",
@@ -217,8 +144,8 @@ async function main() {
 			JSON.stringify(beta.body),
 		);
 
-		const alphaActor = actorNameFor(alphaId);
-		const betaActor = actorNameFor(betaId);
+		const alphaActor = actorNameFor(alphaId, actorPrefix);
+		const betaActor = actorNameFor(betaId, actorPrefix);
 		check("the conversation names map to distinct actors", alphaActor !== betaActor, `${alphaActor} / ${betaActor}`);
 		check(
 			"both actors exist in the atespace",
@@ -241,7 +168,7 @@ async function main() {
 		// worker slot, an actor left RUNNING here takes a slot from a real
 		// conversation and makes its next turn fail with a 503, so remove what
 		// this run created. Removing an actor also drops its egress policy.
-		for (const conversationId of conversations) await removeActor(actorNameFor(conversationId));
+		for (const conversationId of conversations) await dropActor(actorNameFor(conversationId, actorPrefix));
 	}
 
 	const failed = checks.filter((entry) => !entry.ok);

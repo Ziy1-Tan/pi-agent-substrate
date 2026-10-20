@@ -25,19 +25,14 @@ export async function saveUploads(
 	uploads: UploadInput[] | undefined,
 ): Promise<AttachmentInput[]> {
 	if (!uploads?.length) return [];
-	await mkdir(filesDir, { recursive: true });
 	const saved: AttachmentInput[] = [];
 	for (const [index, upload] of uploads.entries()) {
 		const data = Buffer.from(upload.data, "base64");
 		if (data.byteLength > MAX_UPLOAD_BYTES) {
 			throw new Error(`attachment ${upload.name} exceeds ${MAX_UPLOAD_BYTES} bytes`);
 		}
-		// A client can send any name; keep only the leaf so an upload cannot
-		// escape the conversation directory.
-		const name = safeName(upload.name) || `upload-${index + 1}`;
-		const path = join(filesDir, `${Date.now()}-${messageId}-${index + 1}-${name}`);
-		await writeFile(path, data);
-		saved.push({ path, name, mimeType: upload.mimeType });
+		const fallback = `upload-${index + 1}`;
+		saved.push(await writeOne(filesDir, `${messageId}-${index + 1}`, upload.name, fallback, data, upload.mimeType));
 	}
 	return saved;
 }
@@ -49,11 +44,27 @@ export async function saveBytes(
 	bytes: Uint8Array,
 	mimeType?: string,
 ): Promise<AttachmentInput> {
+	return writeOne(filesDir, String(process.hrtime.bigint()), name, "file", bytes, mimeType);
+}
+
+/**
+ * Writes one attachment under a name no two turns can collide on. A client can
+ * send any name, so only the leaf survives; the leaf itself may still be empty
+ * or unusable, which is what `fallback` covers.
+ */
+async function writeOne(
+	filesDir: string,
+	tag: string,
+	rawName: string,
+	fallback: string,
+	bytes: Uint8Array,
+	mimeType: string | undefined,
+): Promise<AttachmentInput> {
 	await mkdir(filesDir, { recursive: true });
-	const clean = safeName(name) || "file";
-	const path = join(filesDir, `${Date.now()}-${process.hrtime.bigint()}-${clean}`);
+	const name = safeName(rawName) || fallback;
+	const path = join(filesDir, `${Date.now()}-${tag}-${name}`);
 	await writeFile(path, bytes);
-	return { path, name: clean, mimeType };
+	return { path, name, mimeType };
 }
 
 function safeName(value: string): string {

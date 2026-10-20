@@ -27,8 +27,7 @@ export type LifecycleReason =
 	| "prompt_during_suspend"
 	| "suspend_requested"
 	| "suspend_failed"
-	| "actor_running"
-	| "actor_crashed";
+	| "actor_running";
 
 export interface LifecycleEvent {
 	reason: LifecycleReason;

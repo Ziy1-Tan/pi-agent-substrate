@@ -62,9 +62,9 @@ function counts(records: { type: string }[], type: string): number {
 test("test channel delivers a message with streaming edits", async (t) => {
 	const harness = await createHarness(t);
 	const gateway = await harness.open();
-	await gateway.receive(message);
-	await gateway.waitForIdle();
+	const reply = await gateway.receive(message);
 
+	assert.equal(reply.text, "Reply: hello", "the queued turn returns its own reply");
 	assert.equal(harness.channel.sent.length, 1);
 	assert.equal(harness.channel.sent[0]?.text, "Reply: hello");
 	assert.ok(harness.channel.sent[0]?.replyToMessageId, "outbound replies to the inbound message");
@@ -92,8 +92,9 @@ test("restart before submit delivers the queued turn exactly once", async (t) =>
 			throw new GatewayAbort("crash before submit");
 		},
 	});
-	await crashing.receive(message);
-	await assert.rejects(crashing.waitForIdle(), GatewayAbort);
+	// `receive` resolves with its own turn now, so the injected crash
+	// surfaces from the call that queued it.
+	await assert.rejects(crashing.receive(message), GatewayAbort);
 	await crashing.stop();
 
 	const before = await readRecords(harness.conversation.logPath);
@@ -120,8 +121,9 @@ test("restart after submit but before response reuses the request id", async (t)
 			throw new GatewayAbort("crash after submit");
 		},
 	});
-	await crashing.receive(message);
-	await assert.rejects(crashing.waitForIdle(), GatewayAbort);
+	// `receive` resolves with its own turn now, so the injected crash
+	// surfaces from the call that queued it.
+	await assert.rejects(crashing.receive(message), GatewayAbort);
 	await crashing.stop();
 
 	const before = await readRecords(harness.conversation.logPath);
@@ -151,8 +153,9 @@ test("restart after the response was recorded only acknowledges the turn", async
 			throw new GatewayAbort("crash after outbound");
 		},
 	});
-	await crashing.receive(message);
-	await assert.rejects(crashing.waitForIdle(), GatewayAbort);
+	// `receive` resolves with its own turn now, so the injected crash
+	// surfaces from the call that queued it.
+	await assert.rejects(crashing.receive(message), GatewayAbort);
 	await crashing.stop();
 
 	const before = await readRecords(harness.conversation.logPath);
@@ -177,8 +180,9 @@ test("restart after send before outbound suppresses the duplicate delivery", asy
 			throw new GatewayAbort("crash after channel send");
 		},
 	});
-	await crashing.receive(message);
-	await assert.rejects(crashing.waitForIdle(), GatewayAbort);
+	// `receive` resolves with its own turn now, so the injected crash
+	// surfaces from the call that queued it.
+	await assert.rejects(crashing.receive(message), GatewayAbort);
 	await crashing.stop();
 
 	const before = await readRecords(harness.conversation.logPath);
@@ -195,4 +199,20 @@ test("restart after send before outbound suppresses the duplicate delivery", asy
 	assert.equal(harness.channel.sent.length, 1, "the user sees one message");
 	assert.equal(harness.channel.sendAttempts, 2);
 	assert.equal(harness.channel.duplicateDeliveries, 1);
+});
+
+test("two callers queued on one conversation each get their own reply", async (t) => {
+	// The reply used to be read from a shared "last turn" slot, so whichever
+	// turn finished last overwrote what the other caller was about to read.
+	// Each `receive` now resolves with the turn it queued.
+	const harness = await createHarness(t, 10);
+	const gateway = await harness.open();
+
+	const [first, second] = await Promise.all([
+		gateway.receive({ userId: "u", userName: "alice", text: "first" }),
+		gateway.receive({ userId: "u", userName: "alice", text: "second" }),
+	]);
+	assert.equal(first.text, "Reply: first");
+	assert.equal(second.text, "Reply: second");
+	assert.equal(harness.channel.sent.length, 2, "both turns were delivered");
 });

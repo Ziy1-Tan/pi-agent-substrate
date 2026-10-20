@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { MAX_UPLOAD_BYTES, saveUploads } from "../src/channel/uploads.js";
-import { TurnRecorder } from "../src/channel/recorder.js";
+import { MAX_UPLOAD_BYTES, saveUploads } from "../src/channel/files.js";
+import { NullChannel } from "../src/gateway/null-channel.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { createConversation } from "../src/gateway/conversations.js";
 import { StubBackend } from "./support/stub-backend.js";
@@ -19,7 +19,7 @@ async function tempRoot(t: test.TestContext): Promise<string> {
 test("an upload lands in the conversation's incoming directory and shows up in the prompt", async (t) => {
 	const root = await tempRoot(t);
 	const conversation = await createConversation(root, "local/chat");
-	const channel = new TurnRecorder();
+	const channel = new NullChannel();
 	const gateway = new Gateway({ conversation, channel, backend: new StubBackend() });
 	await gateway.start();
 	t.after(() => gateway.stop());

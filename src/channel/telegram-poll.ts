@@ -1,6 +1,6 @@
 import type { AttachmentInput, InboundMessageInput } from "../../third_party/pi-chat/types.js";
 import type { GatewayManager, ConversationSpec } from "../gateway/manager.js";
-import { saveBytes } from "./uploads.js";
+import { saveBytes } from "./files.js";
 
 export interface TelegramUpdate {
 	update_id: number;
@@ -94,9 +94,10 @@ export class TelegramPoll {
 		const attachments = await this.attachments(message, conversationId);
 		if (text.trim().length === 0 && attachments.length === 0) return;
 
-		let entry: Awaited<ReturnType<GatewayManager["ensure"]>>;
+		// `ensure` is what creates or opens the conversation; the reply itself
+		// goes to the chat through the adapter, not back here.
 		try {
-			entry = await this.manager.ensure(this.options.specFor(conversationId));
+			await this.manager.ensure(this.options.specFor(conversationId));
 		} catch (error) {
 			this.log(`cannot open ${conversationId}: ${describe(error)}`);
 			return;

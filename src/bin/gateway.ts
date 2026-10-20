@@ -35,7 +35,7 @@ import { startHttpServer } from "../channel/server.js";
 import { TelegramChannel } from "../channel/telegram.js";
 import { TelegramPoll } from "../channel/telegram-poll.js";
 import { KubectlAteControl } from "../lifecycle/kubectl.js";
-import type { ActorControl } from "../lifecycle/types.js";
+import type { ActorControl } from "../lifecycle/control.js";
 
 const run = promisify(execFile);
 

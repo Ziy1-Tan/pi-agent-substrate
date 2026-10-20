@@ -1,8 +1,6 @@
 import type { InboundMessageInput, ResolvedConversation } from "../../third_party/pi-chat/types.js";
 import type { IdleLifecycle } from "../lifecycle/idle.js";
 
-export type Checkpoint = { cursor?: string; messageId?: string };
-
 export interface OutboundDelivery {
 	/** Stable per turn. Channels may use it to suppress a retried delivery. */
 	deliveryId: string;
@@ -44,10 +42,6 @@ export interface AgentBackend {
 	 * the same turn's result instead of executing it again.
 	 */
 	submit(request: AgentRequest, onDelta: AgentEventListener): Promise<AgentResponse>;
-	/** Stops an in-flight turn, if the backend can. The turn rejects. */
-	cancel?(requestId: string): void;
-	/** Discards the running conversation inside the actor. */
-	newSession?(): Promise<void>;
 }
 
 export type GatewayHookPoint =
@@ -61,7 +55,6 @@ export type GatewayHooks = Partial<Record<GatewayHookPoint, () => void | Promise
 
 /** Timing and state the gateway reports after each turn. */
 export interface TurnReport {
-	requestId: string;
 	/** Wall time from dispatch to the settled response. */
 	turnMillis: number;
 	/** Wall time from dispatch to the first streamed delta, when one arrived. */

@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 
 import { WebSocket, WebSocketServer } from "ws";
 
-import { parseRecord } from "../protocol/lines.js";
-import type { RpcCommand } from "../protocol/rpc.js";
+import { parseRecord } from "./lines.js";
+import type { RpcCommand } from "./rpc.js";
 import { PiActivity, PiProcess } from "./pi-process.js";
 
 export interface BridgeOptions {

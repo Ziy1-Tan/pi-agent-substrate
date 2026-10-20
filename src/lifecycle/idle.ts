@@ -5,7 +5,7 @@ import {
 	type LifecycleClock,
 	type LifecycleEvent,
 	type LifecycleListener,
-} from "./types.js";
+} from "./control.js";
 
 export type IdleState = "IDLE" | "ACTIVE" | "GRACE" | "SUSPENDING" | "SUSPENDED";
 
@@ -84,14 +84,6 @@ export class IdleLifecycle {
 		this.armTimer();
 	}
 
-	/** Called when the actor stops being usable; the next prompt recreates it. */
-	actorCrashed(error?: string): void {
-		this.cancelTimer();
-		this.inflight = 0;
-		this.current = "SUSPENDED";
-		this.emit("actor_crashed", { error });
-	}
-
 	/** Creates the actor if absent. Safe to call before every turn. */
 	async ready(): Promise<void> {
 		await this.control.ensure(this.actor);
@@ -111,6 +103,10 @@ export class IdleLifecycle {
 
 	private armTimer(): void {
 		this.cancelTimer();
+		// `0` disables automatic suspend. Scheduling a zero-delay timer instead
+		// suspends the actor the instant a turn settles, which is not idle at
+		// all: the next message then pays a full resume.
+		if (this.idleMs === 0) return;
 		this.timer = this.clock.schedule(() => {
 			this.timer = undefined;
 			void this.onIdle();

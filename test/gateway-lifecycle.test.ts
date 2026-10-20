@@ -8,7 +8,7 @@ import { StubBackend } from "./support/stub-backend.js";
 import { createConversation } from "../src/gateway/conversations.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { IdleLifecycle } from "../src/lifecycle/idle.js";
-import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/lifecycle/types.js";
+import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/lifecycle/control.js";
 import { TestChannel } from "./support/test-channel.js";
 
 class ManualClock implements LifecycleClock {

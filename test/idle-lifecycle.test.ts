@@ -9,7 +9,7 @@ import type {
 	LifecycleClock,
 	LifecycleEvent,
 	LifecycleReason,
-} from "../src/lifecycle/types.js";
+} from "../src/lifecycle/control.js";
 
 /** A clock tests advance by hand. */
 class FakeClock implements LifecycleClock {
@@ -210,4 +210,18 @@ test("a failed suspend is reported and retried after another idle window", async
 	await clock.advance(1_000);
 	assert.equal(control.suspends, 2);
 	assert.equal(lifecycle.state, "SUSPENDED");
+});
+
+test("an idle window of zero disables the suspend entirely", async () => {
+	// `PI_IDLE_SECONDS=0` is documented as "disables it". A zero-delay timer
+	// would instead suspend the moment a turn settles, so the next message
+	// pays a full resume for what was never idle.
+	const { clock, control, lifecycle } = setup(0);
+
+	lifecycle.turnStarted();
+	lifecycle.turnSettled();
+	await clock.advance(60_000);
+
+	assert.equal(control.suspends, 0);
+	assert.equal(lifecycle.state, "GRACE");
 });

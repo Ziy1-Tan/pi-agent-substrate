@@ -16,46 +16,20 @@
  * templates and worker pool from hack/e2e-kind.sh.
  */
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import WebSocket from "ws";
 
-const run = promisify(execFile);
+import { actorState as readActorState, ateClient, createChecks, waitFor } from "./e2e-lib.js";
 
-const atespace = process.env.PI_ATESPACE ?? "pi-agents";
+const { atespace, ate } = ateClient();
 const actor = process.env.PI_ACTOR ?? "pi-actor-1";
 const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
-const kubectlAte = process.env.KUBECTL_ATE ?? "kubectl-ate";
-const kubeContext = process.env.KUBE_CONTEXT;
 const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.yaml";
 
-const log = (message) => console.log(`[e2e] ${message}`);
-
-async function ate(...args) {
-	const command = [kubectlAte, ...(kubeContext ? ["--context", kubeContext] : []), ...args];
-	const { stdout } = await run(command[0], command.slice(1), { maxBuffer: 16 * 1024 * 1024 });
-	return stdout;
-}
-
-async function actorState() {
-	const stdout = await ate("get", "actors", actor, "-a", atespace, "-o", "json");
-	const parsed = JSON.parse(stdout);
-	// A single named actor comes back as one object; a list comes back wrapped.
-	const entry = Array.isArray(parsed.actors) ? parsed.actors[0] : parsed;
-	return entry?.status?.state ?? "UNKNOWN";
-}
-
-async function waitForState(predicate, timeoutMs, label) {
-	const deadline = Date.now() + timeoutMs;
-	let state = "UNKNOWN";
-	while (Date.now() < deadline) {
-		state = await actorState();
-		if (predicate(state)) return state;
-		await new Promise((resolve) => setTimeout(resolve, 1000));
-	}
-	throw new Error(`timed out waiting for ${label}; last state ${state}`);
-}
+const log = (message) => console.log(`[actor-e2e] ${message}`);
+const { check, checks } = createChecks(log);
+const actorState = () => readActorState({ ate, atespace }, actor);
+const waitForState = (predicate, timeoutMs, label) => waitFor(actorState, predicate, timeoutMs, label, 1000);
 
 class ActorClient {
 	constructor() {
@@ -133,13 +107,6 @@ function toolSucceeded(client, needle) {
 	);
 }
 
-const checks = [];
-function check(name, condition, detail = "") {
-	checks.push({ name, ok: Boolean(condition), detail });
-	if (condition) log(`PASS ${name}`);
-	else log(`FAIL ${name}${detail ? `: ${detail}` : ""}`);
-}
-
 async function main() {
 	log(`router ${router}, actor ${atespace}/${actor}`);
 	// The router resumes the actor on the first connect, so the initial state
@@ -215,7 +182,7 @@ async function cleanup() {
 main()
 	.then(cleanup)
 	.catch(async (error) => {
-		console.error(`[e2e] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+		console.error(`[actor-e2e] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 		await cleanup();
 		process.exit(1);
 	});

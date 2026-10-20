@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { LineFramer, encodeRecord } from "../protocol/lines.js";
+import { LineFramer, encodeRecord } from "./lines.js";
 import {
 	assistantOutcome,
 	isAgentSettled,
@@ -8,7 +8,7 @@ import {
 	isTextDelta,
 	retryFailure,
 	type RpcState,
-} from "../protocol/rpc.js";
+} from "./rpc.js";
 
 export interface PiProcessOptions {
 	command: string;

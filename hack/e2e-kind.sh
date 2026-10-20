@@ -220,7 +220,7 @@ if [[ "${ONLY}" != "deploy" ]]; then
   echo "==> running the clustered e2e"
   PI_ATESPACE="${ATESPACE}" PI_ACTOR="${ACTOR}" PI_ROUTER_URL="${ROUTER_URL}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
-    node hack/e2e-kind.js
+    node hack/e2e-actor.js
 
   echo "==> running the HTTP channel e2e"
   PI_ATESPACE="${ATESPACE}" PI_ROUTER_URL="${ROUTER_URL}" \

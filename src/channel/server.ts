@@ -6,8 +6,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 
-import { MAX_UPLOAD_BYTES, saveUploads, type UploadInput } from "./uploads.js";
+import { saveUploads, type UploadInput } from "./files.js";
 import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
+import type { AgentResponse } from "../gateway/types.js";
 
 export interface HttpServerOptions {
 	manager: GatewayManager;
@@ -81,12 +82,12 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 			return;
 		}
 
-		// The reply is recorded by the conversation's turn recorder before
-		// `receive` returns, so the caller reads it as ordinary JSON.
-		entry.recorder.begin();
+		// The reply is this request's own turn result, so two callers on one
+		// conversation each get their own answer rather than the last to settle.
+		let reply: AgentResponse;
 		try {
 			const attachments = await saveUploads(entry.conversation.filesDir, messageId, uploads);
-			await options.manager.receive(conversationId, {
+			reply = await options.manager.receive(conversationId, {
 				userId: typeof body.userId === "string" ? body.userId : "curl",
 				userName: typeof body.userName === "string" ? body.userName : "curl",
 				text,
@@ -97,12 +98,11 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 			respond(response, 502, { error: describe(error), messageId });
 			return;
 		}
-		const { text: reply, error: failure } = entry.recorder.outcome;
-		if (failure !== undefined) {
-			respond(response, 502, { error: failure, messageId });
+		if (reply.error !== undefined) {
+			respond(response, 502, { error: reply.error, messageId });
 			return;
 		}
-		respond(response, 200, { conversation: conversationId, messageId, text: reply ?? "" });
+		respond(response, 200, { conversation: conversationId, messageId, text: reply.text });
 	}
 
 	server.listen(port, options.host ?? "127.0.0.1");

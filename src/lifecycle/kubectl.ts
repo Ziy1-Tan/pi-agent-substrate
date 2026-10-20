@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { ActorControl, ActorRef, ActorState } from "./types.js";
+import type { ActorControl, ActorRef, ActorState } from "./control.js";
 
 const run = promisify(execFile);
 

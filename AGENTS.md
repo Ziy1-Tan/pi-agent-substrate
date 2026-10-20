@@ -64,6 +64,49 @@ ConfigMap once at startup, so restart the deployment after editing.
 
 ## Templates
 
+### A wakeup probe disables the golden-snapshot warmup
+
+`goldenSnapshotWarmupFor` in `cmd/ateapi/internal/controlapi/template_reconciler.go`
+returns 0 when every container declares a `wakeupProbe`, and the 20s
+`goldenSnapshotWarmup` constant otherwise. The reasoning is that `ResumeActor`
+already blocked until the probe reported 200, so the workload must be
+initialized. That holds for a service that answers its health check only once
+it is fully up; it does not hold for a Node process that answers as soon as it
+binds a port.
+
+The bridge used to do the latter. `/healthz` returned 200 about 500ms after
+start, so the golden actor was checkpointed at 500ms, and the restored sandbox
+came back with a bridge that never listened again: the wakeup probe on the next
+resume timed out after 30s, the actor went `CRASHED`, and atenet-router
+answered the message with a 503. The two timings, measured on the same code:
+
+```
+with probe:     Actor started 00.814 -> Actor checkpointing 01.329   (515ms)
+without probe:  Actor started 00.814 -> Actor checkpointing 30.830   (20.5s)
+```
+
+The 20s is hard-coded: no flag, env, or template field changes it. The template
+therefore declares no probe, and gets the conservative wall-clock warmup.
+
+This affects golden snapshots only. An ordinary actor is snapshotted by its
+idle-suspend, long after the bridge settled, so the probe would not matter
+there. It does matter for `ResumeActor`, which no longer waits for the workload
+at all: fine while the template uses `SNAPSHOT_FIDELITY_MEMORY`, since the
+listener comes back inside the snapshot, but a cold-start fidelity would need
+the probe again.
+
+Any replacement readiness signal has to answer two different questions, and
+`/healthz` currently answers only the first: "can this port take traffic" and
+"is this process safe to freeze". A signal that keeps the probe honest for
+`ResumeActor` without re-enabling the 0s warmup would have to return non-200
+until the process has been up for longer than the controller's 20s. The
+sandbox clock keeps running across suspend — `/proc/uptime` advanced by the
+wall-clock gap through a suspend/resume cycle — so process age is measurable
+after a restore, but at that point the listener is already in the snapshot and
+the gate buys nothing.
+
+### A template is immutable
+
 A template is immutable; changing the image, env, or limits needs a new name,
 and `AlreadyExists` on a rerun is expected. Pin images by the platform manifest
 digest: `docker inspect` reports the multi-arch index, and pulling that index

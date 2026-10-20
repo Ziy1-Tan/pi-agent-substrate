@@ -5,10 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { startHttpServer, type HttpServer } from "../src/channel/server.js";
-import { TelegramChannel } from "../src/channel/telegram.js";
-import { TelegramPoll } from "../src/channel/telegram-poll.js";
-import { GatewayManager } from "../src/gateway/manager.js";
+import { startHttpServer, type HttpServer } from "../src/host/channel/server.js";
+import { TelegramChannel } from "../src/host/channel/telegram.js";
+import { TelegramPoll } from "../src/host/channel/telegram-poll.js";
+import { GatewayManager } from "../src/host/manager.js";
 
 interface Setup {
 	server: HttpServer;

@@ -7,8 +7,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomUUID } from "node:crypto";
 
 import { saveUploads, type UploadInput } from "./files.js";
-import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
-import type { AgentResponse } from "../gateway/types.js";
+import { GatewayManager, type ConversationSpec } from "../manager.js";
+import type { AgentResponse } from "../types.js";
 
 export interface HttpServerOptions {
 	manager: GatewayManager;

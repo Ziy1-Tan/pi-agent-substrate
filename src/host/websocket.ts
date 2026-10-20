@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 
-import type { ActorTransport } from "../actor/backend.js";
+import type { ActorTransport } from "./backend.js";
 
 /** Longest a connect may stay pending; also the stale-connection window. */
 const CONNECT_TIMEOUT_MS = 10_000;

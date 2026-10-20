@@ -1,5 +1,5 @@
 import type { InboundMessageInput, ResolvedConversation } from "../../third_party/pi-chat/types.js";
-import type { IdleLifecycle } from "../lifecycle/idle.js";
+import type { IdleLifecycle } from "./lifecycle/idle.js";
 
 export interface OutboundDelivery {
 	/** Stable per turn. Channels may use it to suppress a retried delivery. */

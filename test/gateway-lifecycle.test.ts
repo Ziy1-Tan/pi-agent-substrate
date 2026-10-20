@@ -5,10 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { createConversation } from "../src/gateway/conversations.js";
-import { Gateway } from "../src/gateway/gateway.js";
-import { IdleLifecycle } from "../src/lifecycle/idle.js";
-import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/lifecycle/control.js";
+import { createConversation } from "../src/host/conversations.js";
+import { Gateway } from "../src/host/gateway.js";
+import { IdleLifecycle } from "../src/host/lifecycle/idle.js";
+import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/host/lifecycle/control.js";
 import { TestChannel } from "./support/test-channel.js";
 
 class ManualClock implements LifecycleClock {

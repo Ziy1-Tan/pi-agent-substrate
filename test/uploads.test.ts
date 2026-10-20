@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { MAX_UPLOAD_BYTES, saveUploads } from "../src/channel/files.js";
-import { NullChannel } from "../src/gateway/null-channel.js";
-import { Gateway } from "../src/gateway/gateway.js";
-import { createConversation } from "../src/gateway/conversations.js";
+import { MAX_UPLOAD_BYTES, saveUploads } from "../src/host/channel/files.js";
+import { NullChannel } from "../src/host/null-channel.js";
+import { Gateway } from "../src/host/gateway.js";
+import { createConversation } from "../src/host/conversations.js";
 import { StubBackend } from "./support/stub-backend.js";
 
 async function tempRoot(t: test.TestContext): Promise<string> {

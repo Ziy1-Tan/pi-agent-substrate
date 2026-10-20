@@ -87,7 +87,7 @@ Telegram:
 
 ```sh
 PI_TELEGRAM_TOKEN=123:abc PI_TELEGRAM_CHATS=42 \
-  node dist/src/bin/gateway.js
+  node dist/src/host/main.js
 ```
 
 Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets

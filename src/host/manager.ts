@@ -1,13 +1,13 @@
-import { PiBackend } from "../actor/backend.js";
+import { PiBackend } from "./backend.js";
 import type { ResolvedConversation } from "../../third_party/pi-chat/types.js";
 import type { AgentBackend, AgentResponse, Channel, InboundMessageInput } from "./types.js";
 import { createConversation } from "./conversations.js";
 import { Gateway } from "./gateway.js";
 import { NullChannel } from "./null-channel.js";
-import { IdleLifecycle } from "../lifecycle/idle.js";
-import type { ActorControl, ActorRef } from "../lifecycle/control.js";
+import { IdleLifecycle } from "./lifecycle/idle.js";
+import type { ActorControl, ActorRef } from "./lifecycle/control.js";
 import { Metrics } from "../metrics.js";
-import { WebSocketTransport } from "../actor/websocket.js";
+import { WebSocketTransport } from "./websocket.js";
 
 export interface ConversationSpec {
 	conversationId: string;

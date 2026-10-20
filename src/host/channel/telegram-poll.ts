@@ -1,5 +1,5 @@
-import type { AttachmentInput, InboundMessageInput } from "../../third_party/pi-chat/types.js";
-import type { GatewayManager, ConversationSpec } from "../gateway/manager.js";
+import type { AttachmentInput, InboundMessageInput } from "../../../third_party/pi-chat/types.js";
+import type { GatewayManager, ConversationSpec } from "../manager.js";
 import { saveBytes } from "./files.js";
 
 export interface TelegramUpdate {

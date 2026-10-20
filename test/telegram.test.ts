@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { splitMessage, TelegramChannel } from "../src/channel/telegram.js";
+import { splitMessage, TelegramChannel } from "../src/host/channel/telegram.js";
 
 interface Call {
 	method: string;

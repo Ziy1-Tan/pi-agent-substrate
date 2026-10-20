@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { LineFramer, encodeRecord } from "../src/bridge/lines.js";
+import { LineFramer, encodeRecord } from "../src/sandbox/lines.js";
 
 test("framer splits on LF and keeps U+2028/U+2029 inside records", () => {
 	const framer = new LineFramer();

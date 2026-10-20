@@ -1,4 +1,4 @@
-import type { Channel, OutboundDelivery } from "../gateway/types.js";
+import type { Channel, OutboundDelivery } from "../types.js";
 
 export interface TelegramChannelOptions {
 	botToken: string;

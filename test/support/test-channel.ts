@@ -1,4 +1,4 @@
-import type { Channel, OutboundDelivery } from "../../src/gateway/types.js";
+import type { Channel, OutboundDelivery } from "../../src/host/types.js";
 
 export interface SentMessage {
 	deliveryId: string;

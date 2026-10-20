@@ -1,4 +1,4 @@
-import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "../../src/gateway/types.js";
+import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "../../src/host/types.js";
 
 export interface StubBackendOptions {
 	prefix?: string;

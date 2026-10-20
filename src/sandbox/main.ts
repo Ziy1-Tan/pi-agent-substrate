@@ -2,7 +2,7 @@
 /**
  * Actor entry point. One process per sandbox:
  *
- *   node dist/src/bridge/main.js
+ *   node dist/src/sandbox/main.js
  *
  * Configuration is environment only, because an ActorTemplate carries literal
  * env values and the bridge must not depend on files outside `/workspace`.
@@ -20,7 +20,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 
-import { startBridge } from "../bridge/bridge.js";
+import { startBridge } from "./bridge.js";
 
 // An actor runs with an arbitrary initial cwd; Pi reads project-local context
 // from the working directory, so pin it to the durable workspace.

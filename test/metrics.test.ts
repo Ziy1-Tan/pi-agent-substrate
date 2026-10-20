@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { Gateway } from "../src/gateway/gateway.js";
-import { createConversation } from "../src/gateway/conversations.js";
+import { Gateway } from "../src/host/gateway.js";
+import { createConversation } from "../src/host/conversations.js";
 import { Metrics } from "../src/metrics.js";
 import { StubBackend } from "./support/stub-backend.js";
 import { TestChannel } from "./support/test-channel.js";

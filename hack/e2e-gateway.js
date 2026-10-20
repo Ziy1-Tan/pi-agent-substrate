@@ -61,7 +61,7 @@ async function main() {
 	for (const conversationId of conversations) await dropActor(actorNameFor(conversationId, actorPrefix));
 
 	const dataDir = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
-	const gateway = spawn(process.execPath, ["dist/src/bin/gateway.js"], {
+	const gateway = spawn(process.execPath, ["dist/src/host/main.js"], {
 		env: {
 			...process.env,
 			PI_GATEWAY_DATA_DIR: dataDir,

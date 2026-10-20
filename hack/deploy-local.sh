@@ -284,7 +284,7 @@ Start the gateway on this machine:
   PI_EGRESS_POLICY=${RENDERED_POLICY} PI_IDLE_SECONDS=${IDLE_SECONDS} \\
   PI_TELEGRAM_TOKEN=<your bot token> \\
   PI_TELEGRAM_CHATS=${TELEGRAM_CHATS:-<your chat id>} \\
-    node dist/src/bin/gateway.js
+    node dist/src/host/main.js
 
 Then send the bot a message. It creates the conversation on first use, and the
 idle lifecycle suspends the actor ${IDLE_SECONDS}s after the last turn.

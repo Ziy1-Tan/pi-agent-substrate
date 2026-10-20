@@ -30,12 +30,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
-import { startHttpServer } from "../channel/server.js";
-import { TelegramChannel } from "../channel/telegram.js";
-import { TelegramPoll } from "../channel/telegram-poll.js";
-import { KubectlAteControl } from "../lifecycle/kubectl.js";
-import type { ActorControl } from "../lifecycle/control.js";
+import { GatewayManager, type ConversationSpec } from "./manager.js";
+import { startHttpServer } from "./channel/server.js";
+import { TelegramChannel } from "./channel/telegram.js";
+import { TelegramPoll } from "./channel/telegram-poll.js";
+import { KubectlAteControl } from "./lifecycle/kubectl.js";
+import type { ActorControl } from "./lifecycle/control.js";
 
 const run = promisify(execFile);
 

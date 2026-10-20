@@ -1,4 +1,4 @@
-import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "../gateway/types.js";
+import type { AgentBackend, AgentEventListener, AgentRequest, AgentResponse } from "./types.js";
 
 /**
  * The transport the gateway needs to reach one conversation's actor. The
@@ -19,8 +19,6 @@ export interface ActorTransport {
 	/** True while records can be sent. */
 	readonly connected: boolean;
 }
-
-export type { AgentEventListener, AgentRequest, AgentResponse };
 
 interface ActiveTurn {
 	requestId: string;

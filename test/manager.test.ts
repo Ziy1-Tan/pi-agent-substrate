@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { GatewayManager, actorNameFor } from "../src/host/manager.js";
+import { GatewayManager } from "../src/host/manager.js";
+import { ActorProvisioner, actorNameFor } from "../src/host/substrate/provisioner.js";
 
 async function tempRoot(t: test.TestContext): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "pi-manager-"));
@@ -20,27 +21,51 @@ test("actor names are deterministic and legal", () => {
 	assert.equal(actorNameFor("local/chat"), actorNameFor("local/chat"));
 });
 
-test("the manager keeps one actor per conversation and isolates failures", async (t) => {
-	const root = await tempRoot(t);
-	const ensured: string[] = [];
-	const manager = new GatewayManager({
-		dataDir: root,
-		actorUrl: "ws://127.0.0.1:1",
+test("a provisioned actor exists before its egress policy is applied", async () => {
+	const calls: string[] = [];
+	const actors = new ActorProvisioner({
+		atespace: "pi-agents",
 		control: {
 			async ensure(actor) {
-				ensured.push(actor.name);
+				calls.push(`ensure ${actor.atespace}/${actor.name}`);
 			},
 			async suspend() {},
 			async state() {
 				return "running" as const;
 			},
 		},
+		applyEgress: async (actor) => {
+			calls.push(`egress ${actor.atespace}/${actor.name}`);
+		},
+	});
+
+	const actor = await actors.provision("local/chat");
+	assert.deepEqual(actor, { atespace: "pi-agents", name: "pi-local-chat" });
+	assert.deepEqual(calls, ["ensure pi-agents/pi-local-chat", "egress pi-agents/pi-local-chat"]);
+});
+
+test("the manager keeps one actor per conversation and isolates failures", async (t) => {
+	const root = await tempRoot(t);
+	const ensured: string[] = [];
+	const manager = new GatewayManager({
+		dataDir: root,
+		actorUrl: "ws://127.0.0.1:1",
+		actors: new ActorProvisioner({
+			atespace: "pi-agents",
+			control: {
+				async ensure(actor) {
+					ensured.push(actor.name);
+				},
+				async suspend() {},
+				async state() {
+					return "running" as const;
+				},
+			},
+		}),
 	});
 
 	const spec = (conversationId: string) => ({
 		conversationId,
-		atespace: "pi-agents",
-		template: "pi-actor",
 		idleMs: 60_000,
 	});
 

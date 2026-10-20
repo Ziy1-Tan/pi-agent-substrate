@@ -27,21 +27,14 @@
  *   KUBECTL_ATE            kubectl-ate binary (default on PATH)
  *   KUBE_CONTEXT           kubectl context
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import { GatewayManager, type ConversationSpec } from "./manager.js";
 import { startHttpServer } from "./channel/server.js";
 import { TelegramChannel } from "./channel/telegram.js";
 import { TelegramPoll } from "./channel/telegram-poll.js";
-import { KubectlAteControl } from "./lifecycle/kubectl.js";
-import type { ActorControl } from "./lifecycle/control.js";
+import { KubectlAteControl } from "./substrate/kubectl.js";
+import { ActorProvisioner } from "./substrate/provisioner.js";
 
-const run = promisify(execFile);
-
-const atespace = process.env.PI_ATESPACE ?? "pi-agents";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 60);
-const template = process.env.PI_ACTOR_TEMPLATE ?? "pi-actor";
 const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.yaml";
 const telegramToken = process.env.PI_TELEGRAM_TOKEN;
 const telegramApi = process.env.PI_TELEGRAM_API;
@@ -50,45 +43,25 @@ const telegramChats = (process.env.PI_TELEGRAM_CHATS ?? "")
 	.map((value) => value.trim())
 	.filter(Boolean);
 
-const control: ActorControl = new KubectlAteControl({
+const control = new KubectlAteControl({
 	binary: process.env.KUBECTL_ATE,
 	context: process.env.KUBE_CONTEXT,
-	template,
+	template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
 	log: (message) => console.error(`[lifecycle] ${message}`),
 });
 
-/**
- * Applies the egress policy to a new actor. Without it the sandbox cannot
- * reach the model, and the failure looks like an empty reply rather than an
- * error, so this runs before the first turn is dispatched.
- */
-async function provision(actor: { atespace: string; name: string }): Promise<void> {
-	if (!egressPolicy) return;
-	const command = [
-		process.env.KUBECTL_ATE ?? "kubectl-ate",
-		...(process.env.KUBE_CONTEXT ? ["--context", process.env.KUBE_CONTEXT] : []),
-		"create",
-		"egress-policy",
-		actor.name,
-		"-a",
-		actor.atespace,
-		"-f",
-		egressPolicy,
-	];
-	try {
-		await run(command[0] ?? "kubectl-ate", command.slice(1));
-		console.error(`[lifecycle] applied egress policy to ${actor.atespace}/${actor.name}`);
-	} catch (error) {
-		const text = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ""}` : String(error);
-		if (!text.includes("AlreadyExists")) throw error;
-	}
-}
+// Without an egress policy the sandbox cannot reach the model, and the failure
+// looks like an empty reply rather than an error.
+const actors = new ActorProvisioner({
+	atespace: process.env.PI_ATESPACE ?? "pi-agents",
+	control,
+	applyEgress: egressPolicy ? (actor) => control.createEgressPolicy(actor, egressPolicy) : undefined,
+});
 
 const manager = new GatewayManager({
 	dataDir: process.env.PI_GATEWAY_DATA_DIR ?? "/tmp/pi-gateway",
 	actorUrl: process.env.PI_ACTOR_URL ?? "ws://127.0.0.1:8000",
-	control,
-	provision,
+	actors,
 	// Telegram chats reply in place; every other conversation answers through
 	// POST /messages, which reads the conversation's turn recorder.
 	createChannel: (conversation) =>
@@ -104,8 +77,6 @@ const manager = new GatewayManager({
 
 const specFor = (conversationId: string): ConversationSpec => ({
 	conversationId,
-	atespace,
-	template,
 	idleMs: idleSeconds * 1000,
 });
 

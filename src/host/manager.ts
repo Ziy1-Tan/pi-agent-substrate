@@ -4,16 +4,14 @@ import type { AgentBackend, AgentResponse, Channel, InboundMessageInput } from "
 import { createConversation } from "./conversations.js";
 import { Gateway } from "./gateway.js";
 import { NullChannel } from "./null-channel.js";
-import { IdleLifecycle } from "./lifecycle/idle.js";
-import type { ActorControl, ActorRef } from "./lifecycle/control.js";
+import { IdleLifecycle } from "./substrate/idle.js";
+import type { ActorRef } from "./substrate/control.js";
+import type { ActorProvisioner } from "./substrate/provisioner.js";
 import { Metrics } from "../metrics.js";
 import { WebSocketTransport } from "./websocket.js";
 
 export interface ConversationSpec {
 	conversationId: string;
-	atespace: string;
-	/** Template used when the conversation's actor does not exist yet. */
-	template: string;
 	idleMs: number;
 }
 
@@ -22,14 +20,8 @@ export interface ManagerOptions {
 	dataDir: string;
 	/** Bridge endpoint; the actor is selected by the route header. */
 	actorUrl: string;
-	control: ActorControl;
+	actors: ActorProvisioner;
 	metrics?: Metrics;
-	/**
-	 * Gives a freshly created actor its egress rules. Egress policies are
-	 * per-actor, so an actor created without one cannot reach the model and
-	 * every turn fails with an empty reply.
-	 */
-	provision?: (actor: ActorRef) => Promise<void>;
 	/** Replaces the actor backend; tests use it to run without a cluster. */
 	createBackend?: (conversation: ResolvedConversation) => AgentBackend;
 	/**
@@ -47,16 +39,6 @@ export interface ManagedConversation {
 	outbound: Channel | undefined;
 	lifecycle: IdleLifecycle;
 	actor: ActorRef;
-}
-
-/** `local/chat` -> `pi-local-chat`. Stable, and legal as a Kubernetes name. */
-export function actorNameFor(conversationId: string): string {
-	const sanitized = conversationId
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 40);
-	return `pi-${sanitized || "conversation"}`;
 }
 
 /**
@@ -122,13 +104,7 @@ export class GatewayManager {
 	private async open(spec: ConversationSpec): Promise<ManagedConversation> {
 		const log = this.options.log ?? (() => undefined);
 		const conversation = await createConversation(this.options.dataDir, spec.conversationId);
-		const actor: ActorRef = { atespace: spec.atespace, name: actorNameFor(spec.conversationId) };
-
-		// Create-if-absent before the first turn: a gateway may be started for a
-		// conversation whose actor has never existed, and the router only
-		// resumes actors that do.
-		await this.options.control.ensure({ atespace: spec.atespace, name: actor.name });
-		await this.options.provision?.(actor);
+		const actor = await this.options.actors.provision(spec.conversationId);
 
 		const outbound = this.options.createChannel?.(conversation);
 		const transport = new WebSocketTransport({
@@ -141,7 +117,7 @@ export class GatewayManager {
 
 		const lifecycle = new IdleLifecycle({
 			actor,
-			control: this.options.control,
+			control: this.options.actors.control,
 			idleMs: spec.idleMs,
 			log: (message) => log(`[${spec.conversationId}] ${message}`),
 			onEvent: (event) => {

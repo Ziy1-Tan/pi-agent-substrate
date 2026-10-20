@@ -19,7 +19,7 @@ export interface TelegramUpdate {
 
 export interface TelegramPollOptions {
 	botToken: string;
-	/** atespace and template for the actor a conversation maps to. */
+	/** Resolves a conversation id to its actor and lifecycle settings. */
 	specFor: (conversationId: string) => ConversationSpec;
 	/** Conversation id for a chat; defaults to `telegram/<chat id>`. */
 	conversationFor?: (update: TelegramUpdate) => string;

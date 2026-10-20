@@ -9,6 +9,21 @@ import { startHttpServer, type HttpServer } from "../src/host/channel/server.js"
 import { TelegramChannel } from "../src/host/channel/telegram.js";
 import { TelegramPoll } from "../src/host/channel/telegram-poll.js";
 import { GatewayManager } from "../src/host/manager.js";
+import { ActorProvisioner } from "../src/host/substrate/provisioner.js";
+
+/** Actors that already exist and never leave the running state. */
+function idleActors(): ActorProvisioner {
+	return new ActorProvisioner({
+		atespace: "pi-agents",
+		control: {
+			async ensure() {},
+			async suspend() {},
+			async state() {
+				return "running" as const;
+			},
+		},
+	});
+}
 
 interface Setup {
 	server: HttpServer;
@@ -21,13 +36,7 @@ async function setup(t: test.TestContext, telegram = false): Promise<Setup> {
 	const manager = new GatewayManager({
 		dataDir: root,
 		actorUrl: "ws://127.0.0.1:1",
-		control: {
-			async ensure() {},
-			async suspend() {},
-			async state() {
-				return "running" as const;
-			},
-		},
+		actors: idleActors(),
 		createBackend: () => new StubBackend({ chunkSize: 40, delayMs: 0 }),
 		createChannel: telegram
 			? (conversation) =>
@@ -45,8 +54,6 @@ async function setup(t: test.TestContext, telegram = false): Promise<Setup> {
 		port: 0,
 		specFor: (conversationId) => ({
 			conversationId,
-			atespace: "pi-agents",
-			template: "pi-actor",
 			idleMs: 60_000,
 		}),
 	});
@@ -125,13 +132,7 @@ test("a telegram chat becomes its own conversation and replies in the chat", asy
 	const manager = new GatewayManager({
 		dataDir: root,
 		actorUrl: "ws://127.0.0.1:1",
-		control: {
-			async ensure() {},
-			async suspend() {},
-			async state() {
-				return "running" as const;
-			},
-		},
+		actors: idleActors(),
 		createBackend: () => new StubBackend({ chunkSize: 40, delayMs: 0 }),
 		createChannel: (conversation) =>
 			new TelegramChannel({
@@ -153,8 +154,6 @@ test("a telegram chat becomes its own conversation and replies in the chat", asy
 		fetchImpl: api.fetchImpl,
 		specFor: (conversationId) => ({
 			conversationId,
-			atespace: "pi-agents",
-			template: "pi-actor",
 			idleMs: 60_000,
 		}),
 	});

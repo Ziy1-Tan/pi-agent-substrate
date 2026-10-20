@@ -17,7 +17,7 @@
 #   ATESPACE          atespace (default: pi-agents)
 #   ROUTER_URL        router base URL as seen from this machine (default: http://127.0.0.1:8000)
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
-#   WEB_PORT          port for the HTTP-channel e2e (default: 8899)
+#   HTTP_PORT         port for the HTTP-channel e2e (default: 8899)
 #   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
 #   PROVIDER          "mock" (default) or a real provider id; a real provider
 #                     also needs the PI_PROVIDER_* values below and an egress
@@ -40,7 +40,7 @@ ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-e2e}"
 ACTOR="${ACTOR:-pi-actor-1}"
 ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:8000}"
 IDLE_SECONDS="${IDLE_SECONDS:-15}"
-WEB_PORT="${WEB_PORT:-8899}"
+HTTP_PORT="${HTTP_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
 PROVIDER="${PROVIDER:-mock}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/test/egress-policy.yaml}"
@@ -226,7 +226,7 @@ if [[ "${ONLY}" != "deploy" ]]; then
   PI_ATESPACE="${ATESPACE}" PI_ROUTER_URL="${ROUTER_URL}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     PI_ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
-    PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_WEB_PORT="${WEB_PORT}" \
+    PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_HTTP_PORT="${HTTP_PORT}" \
     PI_E2E_CONVERSATIONS="${CONVERSATIONS}" \
-    node hack/e2e-web.js
+    node hack/e2e-gateway.js
 fi

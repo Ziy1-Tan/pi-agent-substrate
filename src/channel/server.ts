@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_UPLOAD_BYTES, saveUploads, type UploadInput } from "./uploads.js";
 import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
 
-export interface WebServerOptions {
+export interface HttpServerOptions {
 	manager: GatewayManager;
 	port?: number;
 	/** Listen address; defaults to 127.0.0.1. */
@@ -19,16 +19,16 @@ export interface WebServerOptions {
 	log?: (message: string) => void;
 }
 
-export interface WebServer {
+export interface HttpServer {
 	port: number;
 	close(): Promise<void>;
 }
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
-export async function startWebServer(options: WebServerOptions): Promise<WebServer> {
-	const log = options.log ?? ((message: string) => console.error(`[web] ${message}`));
-	const port = options.port ?? Number(process.env.PI_WEB_PORT ?? 8788);
+export async function startHttpServer(options: HttpServerOptions): Promise<HttpServer> {
+	const log = options.log ?? ((message: string) => console.error(`[http] ${message}`));
+	const port = options.port ?? Number(process.env.PI_HTTP_PORT ?? 8788);
 
 	const server: Server = createServer((request, response) => {
 		void route(request, response);

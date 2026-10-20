@@ -13,7 +13,8 @@
  *
  * Configuration is environment only:
  *
- *   PI_WEB_PORT            HTTP port (default 8788)
+ *   PI_HTTP_PORT           HTTP port (default 8788)
+ *   PI_HTTP_HOST           listen address (default 127.0.0.1)
  *   PI_GATEWAY_DATA_DIR    conversation storage root (default `/tmp/pi-gateway`)
  *   PI_ACTOR_URL           bridge WebSocket, usually the router's port-forward
  *   PI_ACTOR_TEMPLATE      template used to create a missing actor
@@ -30,7 +31,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { GatewayManager, type ConversationSpec } from "../gateway/manager.js";
-import { startWebServer } from "../channel/server.js";
+import { startHttpServer } from "../channel/server.js";
 import { TelegramChannel } from "../channel/telegram.js";
 import { TelegramPoll } from "../channel/telegram-poll.js";
 import { KubectlAteControl } from "../lifecycle/kubectl.js";
@@ -108,12 +109,12 @@ const specFor = (conversationId: string): ConversationSpec => ({
 	idleMs: idleSeconds * 1000,
 });
 
-const server = await startWebServer({
+const server = await startHttpServer({
 	manager,
-	port: Number(process.env.PI_WEB_PORT ?? 8788),
-	host: process.env.PI_WEB_HOST ?? "127.0.0.1",
+	port: Number(process.env.PI_HTTP_PORT ?? 8788),
+	host: process.env.PI_HTTP_HOST ?? "127.0.0.1",
 	specFor,
-	log: (message) => console.error(`[web] ${message}`),
+	log: (message) => console.error(`[http] ${message}`),
 });
 
 console.log(`gateway on http://127.0.0.1:${server.port}/messages`);

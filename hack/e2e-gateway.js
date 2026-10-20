@@ -12,7 +12,7 @@
  * that two actors run at once.
  *
  *   1. `POST /messages` answers a curl-sized request with the settled reply
- *   2. /metrics reports the turn, and the page is gone (404)
+ *   2. /metrics reports the turn, and `/` answers 404 since the page is gone
  *   3. the idle window suspends the actor with no command, and the next
  *      message resumes it; the resume latency lands in /metrics
  *   4. a second conversation gets a different actor and its own log
@@ -26,7 +26,7 @@ import { promisify } from "node:util";
 const atespace = process.env.PI_ATESPACE ?? "pi-agents";
 const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 12);
-const port = Number(process.env.PI_WEB_PORT ?? 8899);
+const port = Number(process.env.PI_HTTP_PORT ?? 8899);
 const actorPrefix = process.env.PI_ACTOR_PREFIX ?? "pi-";
 const kubectlAte = process.env.KUBECTL_ATE ?? "kubectl-ate";
 const kubeContext = process.env.KUBE_CONTEXT;
@@ -49,7 +49,7 @@ function actorNameFor(conversationId) {
 	return `${actorPrefix}${sanitized || "conversation"}`;
 }
 
-const log = (message) => console.log(`[web-e2e] ${message}`);
+const log = (message) => console.log(`[gateway-e2e] ${message}`);
 const checks = [];
 function check(name, condition, detail = "") {
 	checks.push({ name, ok: Boolean(condition) });
@@ -133,12 +133,12 @@ async function main() {
 	// runs after the checks, so a passing run leaves nothing behind either.
 	for (const conversationId of conversations) await removeActor(actorNameFor(conversationId));
 
-	const dataDir = await mkdtemp(join(tmpdir(), "pi-web-e2e-"));
-	const gateway = spawn(process.execPath, ["dist/src/bin/web.js"], {
+	const dataDir = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
+	const gateway = spawn(process.execPath, ["dist/src/bin/gateway.js"], {
 		env: {
 			...process.env,
 			PI_GATEWAY_DATA_DIR: dataDir,
-			PI_WEB_PORT: String(port),
+			PI_HTTP_PORT: String(port),
 			PI_ACTOR_URL: `ws://${new URL(router).host}`,
 			PI_ATESPACE: atespace,
 			PI_ACTOR_TEMPLATE: actorTemplate,
@@ -160,7 +160,7 @@ async function main() {
 			},
 			(status) => status === 200,
 			60_000,
-			"the web server",
+			"the gateway HTTP server",
 		);
 
 		const missing = await fetch(`http://127.0.0.1:${port}/`);
@@ -250,6 +250,6 @@ async function main() {
 }
 
 main().catch((error) => {
-	console.error(`[web-e2e] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+	console.error(`[gateway-e2e] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 	process.exit(1);
 });

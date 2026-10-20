@@ -5,13 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { startWebServer, type WebServer } from "../src/channel/server.js";
+import { startHttpServer, type HttpServer } from "../src/channel/server.js";
 import { TelegramChannel } from "../src/channel/telegram.js";
 import { TelegramPoll } from "../src/channel/telegram-poll.js";
 import { GatewayManager } from "../src/gateway/manager.js";
 
 interface Setup {
-	server: WebServer;
+	server: HttpServer;
 	manager: GatewayManager;
 	root: string;
 }
@@ -40,7 +40,7 @@ async function setup(t: test.TestContext, telegram = false): Promise<Setup> {
 					})
 			: undefined,
 	});
-	const server = await startWebServer({
+	const server = await startHttpServer({
 		manager,
 		port: 0,
 		specFor: (conversationId) => ({

@@ -88,22 +88,25 @@ without probe:  Actor started 00.814 -> Actor checkpointing 30.830   (20.5s)
 The 20s is hard-coded: no flag, env, or template field changes it. The template
 therefore declares no probe, and gets the conservative wall-clock warmup.
 
+That fallback is not a stable place to stand. Upstream proposed a tunable
+warmup in #487 and dropped the idea, on the grounds that a workload which
+cannot report readiness needs a readiness endpoint rather than a longer timer;
+the merged change was a configurable probe timeout instead. #2068 then moved
+toward requiring a probe on every container and deleting the 20s fallback. If
+that lands, this template stops being accepted. The migration is to make
+`/healthz` answer honestly: return 503 until the process is older than the
+warmup, so the probe can return with the template. Process age survives a
+restore (the sandbox clock keeps running across suspend; `/proc/uptime`
+advanced by the wall-clock gap through a suspend/resume cycle), so a restored
+actor passes the gate immediately and only a cold start waits.
+
 This affects golden snapshots only. An ordinary actor is snapshotted by its
 idle-suspend, long after the bridge settled, so the probe would not matter
 there. It does matter for `ResumeActor`, which no longer waits for the workload
 at all: fine while the template uses `SNAPSHOT_FIDELITY_MEMORY`, since the
 listener comes back inside the snapshot, but a cold-start fidelity would need
-the probe again.
-
-Any replacement readiness signal has to answer two different questions, and
-`/healthz` currently answers only the first: "can this port take traffic" and
-"is this process safe to freeze". A signal that keeps the probe honest for
-`ResumeActor` without re-enabling the 0s warmup would have to return non-200
-until the process has been up for longer than the controller's 20s. The
-sandbox clock keeps running across suspend (`/proc/uptime` advanced by the
-wall-clock gap through a suspend/resume cycle), so process age is measurable
-after a restore, but at that point the listener is already in the snapshot and
-the gate buys nothing.
+the probe again — and that is the other case the `/healthz` change above
+covers.
 
 ### A template is immutable
 

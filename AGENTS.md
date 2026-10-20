@@ -76,7 +76,7 @@ binds a port.
 
 The bridge used to do the latter. `/healthz` returned 200 about 500ms after
 start, so the golden actor was checkpointed at 500ms, and the restored sandbox
-came back with a bridge that never listened again: the wakeup probe on the next
+came back with a bridge that never listened again. The wakeup probe on the next
 resume timed out after 30s, the actor went `CRASHED`, and atenet-router
 answered the message with a 503. The two timings, measured on the same code:
 
@@ -100,8 +100,8 @@ Any replacement readiness signal has to answer two different questions, and
 "is this process safe to freeze". A signal that keeps the probe honest for
 `ResumeActor` without re-enabling the 0s warmup would have to return non-200
 until the process has been up for longer than the controller's 20s. The
-sandbox clock keeps running across suspend — `/proc/uptime` advanced by the
-wall-clock gap through a suspend/resume cycle — so process age is measurable
+sandbox clock keeps running across suspend (`/proc/uptime` advanced by the
+wall-clock gap through a suspend/resume cycle), so process age is measurable
 after a restore, but at that point the listener is already in the snapshot and
 the gate buys nothing.
 

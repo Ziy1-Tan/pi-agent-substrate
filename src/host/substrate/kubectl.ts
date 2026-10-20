@@ -10,7 +10,7 @@ export interface KubectlAteControlOptions {
 	binary?: string;
 	/** `--context` passed to every call. */
 	context?: string;
-	/** Manifest used by `ensure` when the actor is absent. */
+	/** Template `ensure` creates a missing actor from. */
 	template: string;
 	/** `--token-file` passed through for non-local clusters. */
 	tokenFile?: string;

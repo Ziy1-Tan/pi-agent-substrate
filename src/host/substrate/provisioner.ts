@@ -27,8 +27,8 @@ export interface ActorProvisionerOptions {
  * actors that exist, so this runs when a conversation opens.
  */
 export class ActorProvisioner {
-	readonly atespace: string;
 	readonly control: ActorControl;
+	private readonly atespace: string;
 	private readonly applyEgress: ((actor: ActorRef) => Promise<void>) | undefined;
 
 	constructor(options: ActorProvisionerOptions) {
@@ -37,12 +37,8 @@ export class ActorProvisioner {
 		this.applyEgress = options.applyEgress;
 	}
 
-	actorFor(conversationId: string): ActorRef {
-		return { atespace: this.atespace, name: actorNameFor(conversationId) };
-	}
-
 	async provision(conversationId: string): Promise<ActorRef> {
-		const actor = this.actorFor(conversationId);
+		const actor: ActorRef = { atespace: this.atespace, name: actorNameFor(conversationId) };
 		await this.control.ensure(actor);
 		await this.applyEgress?.(actor);
 		return actor;

@@ -42,10 +42,10 @@ export interface ManagedConversation {
 }
 
 /**
- * Owns one gateway, backend, and lifecycle per conversation, and maps each
- * conversation deterministically to its own actor. Conversations share the
- * control plane and the bridge endpoint but never an actor: a crash or a
- * suspend in one must not take another with it.
+ * Owns one gateway, backend, and lifecycle per conversation, each on the
+ * actor the provisioner places it on. Conversations share the control plane
+ * and the bridge endpoint but never an actor: a crash or a suspend in one
+ * must not take another with it.
  *
  * Failures are contained per conversation. A broken conversation reports its
  * error and stops, while the others keep processing turns.

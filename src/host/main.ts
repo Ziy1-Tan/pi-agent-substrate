@@ -47,7 +47,7 @@ const control = new KubectlAteControl({
 	binary: process.env.KUBECTL_ATE,
 	context: process.env.KUBE_CONTEXT,
 	template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
-	log: (message) => console.error(`[lifecycle] ${message}`),
+	log: (message) => console.error(`[substrate] ${message}`),
 });
 
 // Without an egress policy the sandbox cannot reach the model, and the failure

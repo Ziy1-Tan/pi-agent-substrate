@@ -90,8 +90,8 @@ async function actorState(name) {
 }
 
 /**
- * Removes an actor this e2e may have left behind. It is bound to the template
- * of whichever run created it, and a rerun rebuilds that template, so the old
+ * Removes an actor an earlier run left behind. It is bound to the template of
+ * whichever run created it, and a rerun rebuilds that template, so the old
  * actor can no longer resume; keeping it turns the next run into a 503 from
  * the router rather than a clean start.
  */
@@ -109,9 +109,9 @@ async function removeActor(name) {
 	];
 	try {
 		await promisify(execFile)(args[0], args.slice(1), { maxBuffer: 16 * 1024 * 1024 });
-		log(`removed leftover actor ${name}`);
+		log(`removed actor ${name}`);
 	} catch (error) {
-		log(`could not remove leftover actor ${name}: ${error instanceof Error ? error.message : String(error)}`);
+		log(`could not remove actor ${name}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -178,7 +178,8 @@ function connect(conversation, since) {
 
 async function main() {
 	// Both conversations get an actor on first use. Clear whatever an earlier
-	// run left so this run tests the template it was given.
+	// run left so this run tests the template it was given; the same cleanup
+	// runs after the checks, so a passing run leaves nothing behind either.
 	for (const conversationId of conversations) await removeActor(actorNameFor(conversationId));
 
 	const dataDir = await mkdtemp(join(tmpdir(), "pi-web-e2e-"));
@@ -334,6 +335,11 @@ async function main() {
 		for (const client of clients) client.socket.close();
 		gateway.kill("SIGTERM");
 		await new Promise((resolve) => gateway.once("exit", resolve));
+		// The gateway was this e2e's only suspend driver. Without a second
+		// worker slot, an actor left RUNNING here takes a slot from a real
+		// conversation and makes its next turn fail with a 503, so remove what
+		// this run created. Removing an actor also drops its egress policy.
+		for (const conversationId of conversations) await removeActor(actorNameFor(conversationId));
 	}
 
 	const failed = checks.filter((entry) => !entry.ok);

@@ -194,7 +194,28 @@ async function main() {
 	if (failed.length > 0) process.exit(1);
 }
 
-main().catch((error) => {
-	console.error(`[e2e] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-	process.exit(1);
-});
+/**
+ * Removes the actor this e2e created. It is left RUNNING at the end of the
+ * checks, and the only process that would have suspended it is this script,
+ * which has no idle timer. With one worker holding two actor slots, a leftover
+ * RUNNING actor takes a slot from a real conversation and makes its next turn
+ * fail with a 503 from the router. The template stays: it is reused by the next
+ * run, which rebuilds it when the image changes.
+ */
+async function cleanup() {
+	try {
+		await ate("delete", "actor", actor, "-a", atespace, "--any-state");
+		log(`removed actor ${atespace}/${actor}`);
+	} catch (error) {
+		// A failed run may already have removed it, or never created it.
+		log(`could not remove actor ${actor}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+main()
+	.then(cleanup)
+	.catch(async (error) => {
+		console.error(`[e2e] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+		await cleanup();
+		process.exit(1);
+	});

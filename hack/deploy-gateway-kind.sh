@@ -15,6 +15,7 @@ REGISTRY="${REGISTRY:-localhost:5001}"
 IMAGE="${IMAGE:-${REGISTRY}/pi-gateway:local}"
 TELEGRAM_CHATS="${TELEGRAM_CHATS:-}"
 STOP_LOCAL_GATEWAY="${STOP_LOCAL_GATEWAY:-0}"
+ENV_FILE="${PI_GATEWAY_ENV_FILE:-deploy/local/gateway.env}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
 
@@ -23,15 +24,38 @@ need docker
 need node
 need kubectl
 
-if [[ ! -f deploy/local/gateway.env ]]; then
-  echo "missing deploy/local/gateway.env" >&2
-  exit 1
-fi
 set -a
 # shellcheck disable=SC1091
-. deploy/local/gateway.env
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+fi
 set +a
 TELEGRAM_CHATS="${TELEGRAM_CHATS:-${PI_TELEGRAM_CHATS:-}}"
+
+if [[ "${STOP_LOCAL_GATEWAY}" == 1 ]]; then
+  echo "==> stopping the workstation launchd gateway"
+  launchctl bootout "gui/$(id -u)/com.tanziyi.pi-gateway" 2>/dev/null || true
+fi
+
+if [[ -z "${TELEGRAM_CHATS}" ]]; then
+  replicas="$("${kube[@]}" -n "${ATESPACE}" get deployment pi-gateway \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+  if [[ "${replicas:-0}" -gt 0 ]]; then
+    echo "pi-gateway is already polling; scale it down before discovering a chat id:" >&2
+    echo "  kubectl --context ${KUBE_CONTEXT} -n ${ATESPACE} scale deploy pi-gateway --replicas=0" >&2
+    exit 1
+  fi
+  echo "==> discovering the Telegram chat id"
+  TELEGRAM_CHATS="$(
+    PI_TELEGRAM_TOKEN="${PI_TELEGRAM_TOKEN}" \
+      PI_GATEWAY_ENV_FILE="${ENV_FILE}" \
+      ./hack/telegram-chat-id.sh --write |
+      sed -n 's/^PI_TELEGRAM_CHATS=//p' |
+      tail -n 1
+  )"
+fi
+
 : "${PI_TELEGRAM_TOKEN:?PI_TELEGRAM_TOKEN is required}"
 : "${TELEGRAM_CHATS:?TELEGRAM_CHATS or PI_TELEGRAM_CHATS is required}"
 
@@ -48,11 +72,6 @@ IMAGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}")"
 if [[ -z "${IMAGE_DIGEST}" ]]; then
   echo "could not resolve the pushed gateway image digest" >&2
   exit 1
-fi
-
-if [[ "${STOP_LOCAL_GATEWAY}" == 1 ]]; then
-  echo "==> stopping the workstation launchd gateway"
-  launchctl bootout "gui/$(id -u)/com.tanziyi.pi-gateway" 2>/dev/null || true
 fi
 
 echo "==> creating Telegram and egress config"

@@ -83,42 +83,19 @@ OpenAI-compatible endpoints, `x-api-key` for Anthropic-compatible ones.
 
 ### Talk to it
 
-Telegram:
+Deploy the gateway into kind with the Telegram bot token:
 
 ```sh
-PI_TELEGRAM_TOKEN=123:abc PI_TELEGRAM_CHATS=42 \
-  node dist/src/host/main.js
+PI_TELEGRAM_TOKEN=123:abc ./hack/deploy-gateway-kind.sh
 ```
 
-Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
-an answer; empty answers any chat.
+On the first run the script waits for you to send the bot any message, discovers
+the chat id, writes `deploy/local/gateway.env`, then builds and deploys the
+gateway. Later runs reuse that file. Set `STOP_LOCAL_GATEWAY=1` when replacing
+a workstation poller.
 
-To resolve the chat id from a bot token, start the helper and send the bot any
-message:
-
-```sh
-./hack/telegram-chat-id.sh
-# or, without an interactive prompt:
-PI_TELEGRAM_TOKEN=123:abc ./hack/telegram-chat-id.sh --write
-```
-
-The script prints `PI_TELEGRAM_CHATS=<id>`; `--write` stores the token and id in
-`deploy/local/gateway.env`.
-
-### Run the gateway in kind
-
-The gateway owns the Telegram long poll and conversation log. The actor remains
-a suspendable Substrate workload. Deploy the gateway as one replica with a PVC:
-
-```sh
-cp deploy/local/gateway.env.example deploy/local/gateway.env
-PI_TELEGRAM_TOKEN=123:abc ./hack/telegram-chat-id.sh --write
-STOP_LOCAL_GATEWAY=1 ./hack/deploy-gateway-kind.sh
-```
-
-The script builds the image, stores the token in a Secret, and grants the Pod
-the RBAC needed to mint the shared `ate-client` token. Set
-`STOP_LOCAL_GATEWAY=1` when replacing a workstation poller.
+The gateway owns the Telegram long poll and conversation log; the actor remains
+a suspendable Substrate workload.
 
 The Pod reads the router directly at
 `ws://atenet-router.ate-system.svc:80`; no `kubectl port-forward` is needed.
@@ -131,14 +108,17 @@ kubectl -n pi-agents exec deploy/pi-gateway -- \
   curl -sS http://127.0.0.1:8788/metrics
 ```
 
-The local process remains available for development, but it should not run at
-the same time as the Deployment.
-
 Verify the deployment with a real turn:
 
 ```sh
-TELEGRAM_CHAT=42 ./hack/verify-gateway-kind.sh
+set -a
+. deploy/local/gateway.env
+set +a
+TELEGRAM_CHAT="${PI_TELEGRAM_CHATS}" ./hack/verify-gateway-kind.sh
 ```
+
+For a local gateway process instead of a Deployment, see
+[docs/dev/local-gateway.md](docs/dev/local-gateway.md).
 
 curl:
 

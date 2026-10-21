@@ -93,6 +93,18 @@ PI_TELEGRAM_TOKEN=123:abc PI_TELEGRAM_CHATS=42 \
 Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
 an answer; empty answers any chat.
 
+To resolve the chat id from a bot token, start the helper and send the bot any
+message:
+
+```sh
+./hack/telegram-chat-id.sh
+# or, without an interactive prompt:
+PI_TELEGRAM_TOKEN=123:abc ./hack/telegram-chat-id.sh --write
+```
+
+The script prints `PI_TELEGRAM_CHATS=<id>`; `--write` stores the token and id in
+`deploy/local/gateway.env`.
+
 ### Run the gateway in kind
 
 The gateway owns the Telegram long poll and conversation log. The actor remains
@@ -100,7 +112,7 @@ a suspendable Substrate workload. Deploy the gateway as one replica with a PVC:
 
 ```sh
 cp deploy/local/gateway.env.example deploy/local/gateway.env
-$EDITOR deploy/local/gateway.env  # PI_TELEGRAM_TOKEN and PI_TELEGRAM_CHATS
+PI_TELEGRAM_TOKEN=123:abc ./hack/telegram-chat-id.sh --write
 STOP_LOCAL_GATEWAY=1 ./hack/deploy-gateway-kind.sh
 ```
 

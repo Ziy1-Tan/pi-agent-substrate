@@ -4,3 +4,4 @@ dist/
 *.log
 deploy/local/provider.env
 deploy/local/gateway.env
+deploy/local/gateway.local.env

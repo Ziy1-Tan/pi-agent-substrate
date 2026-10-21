@@ -14,8 +14,7 @@ secret, then prints the command for this checkout:
 ```
 
 Use the `PI_ACTOR_TEMPLATE` and egress policy paths printed by that command.
-The default template is `pi-local`; the example cluster deployment uses
-`pi-local2`.
+The default template is `pi-local`.
 
 ## Resolve the Telegram chat
 

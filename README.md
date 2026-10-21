@@ -3,12 +3,12 @@
 **Always-on Pi agents on [Agent Substrate](https://github.com/agent-substrate/substrate).**
 
 A message arrives, an agent wakes up, answers in a stream, and goes back to
-sleep by itself. The chat connection stays up while the thinking happens in a
-sandbox that costs nothing when idle.
+sleep. The chat connection stays up while its sandbox sleeps: the WorkerPool
+worker is released, and snapshots and storage remain.
 
-This repository runs Pi. It is not a drop-in replacement for an OpenClaw
-deployment. The always-on/gateway and suspendable-actor split is the same; the
-agent runtime and configuration are Pi's.
+This repository runs Pi on Agent Substrate. A resident gateway keeps the chat
+connection and drives a suspendable actor over RPC. Telegram and curl are the
+entry points; a template fixes one provider and model.
 
 ```text
 Telegram / curl
@@ -26,10 +26,9 @@ Telegram / curl
 ## Why
 
 An agent is idle most of the time. A resident process wastes the machine;
-killing it loses the conversation. Here each conversation maps to its own
-suspendable actor: the gateway stays up to hold the chat connection, and the
-actor sleeps between turns with its files and Pi session intact. Sending a
-message is the only thing that wakes it.
+killing it loses the conversation. Here each conversation has its own
+suspendable actor. The gateway holds the chat connection while the actor sleeps.
+The actor keeps its files and Pi session, and only a message wakes it.
 
 ## What you get
 
@@ -46,20 +45,32 @@ message is the only thing that wakes it.
 
 ### Prerequisites
 
-Node.js 22 or newer, Docker, `kubectl`, a kind cluster, a local registry on
-`localhost:5001`, and `kubectl-ate` on `PATH`.
+This project assumes Agent Substrate is already installed. See the
+[Substrate quickstart](https://github.com/agent-substrate/substrate#quickstart-development)
+if it is not.
 
-Install Substrate from an upstream checkout before using this repository:
+Check the cluster and local tools:
 
 ```sh
-cd /path/to/substrate
-hack/create-kind-cluster.sh
-hack/install-ate-kind.sh --deploy-ate-system \
-  --credential-provider='{"name":"k8s.io"}'
+kubectl config current-context
+kubectl -n ate-system get svc atenet-router
+kubectl get workerpools -A
+kubectl-ate get atespace pi-agents
+node --version && docker version --format '{{.Server.Version}}' &&
+kubectl version --client && kubectl-ate --version &&
+envsubst --version | head -1 && jq --version && curl --version | head -1
 ```
 
-Set `KUBECTL_CONTEXT` for the upstream installer if the kind context is not
-`kind-kind`. The scripts in this repository use `KUBE_CONTEXT`.
+Set `KUBE_CONTEXT` for a non-default cluster. The smoke test needs a gVisor
+WorkerPool; real deployments also need one in `pi-agents` with `workload: pi`.
+See [deployment notes](docs/deployment.md) if a check fails.
+
+Install this repository's dependencies:
+
+```sh
+cd /path/to/pi-agent-substrate
+npm install
+```
 
 ### Mock smoke test
 
@@ -70,10 +81,11 @@ gateway process without a provider key:
 ./hack/e2e-kind.sh
 ```
 
-This builds the actor and mock model images, applies the kind namespace and
-WorkerPool, creates a template, and runs the clustered actor and gateway tests.
-It needs no network access to a model provider. It does not deploy the
-always-on `pi-gateway` Deployment.
+This builds the actor and mock model images, applies the kind namespace,
+replaces `pi-workerpool` and the `pi-e2e` template, and runs the clustered
+actor and gateway tests. It needs no provider key, but the gVisor WorkerPool
+must already exist so the script can find its worker image. This does not
+deploy `pi-gateway`.
 
 ### Real provider + Telegram
 
@@ -81,18 +93,25 @@ always-on `pi-gateway` Deployment.
 cp deploy/local/provider.env.example deploy/local/provider.env
 $EDITOR deploy/local/provider.env     # provider, model, endpoint, API, key
 
-# kind follows the microvm default only when the node advertises ate.dev/kvm.
-# For the gVisor WorkerPool created by e2e-kind.sh, use:
+# The actor defaults to the microvm sandbox. For the existing gVisor pool, use:
+# Keep ACTOR_TEMPLATE the same for both commands.
+ACTOR_TEMPLATE=pi-local \
 SANDBOX_CLASS=SANDBOX_CLASS_GVISOR SANDBOX_CONFIG=gvisor-default \
   ./hack/deploy-local.sh
 
-PI_TELEGRAM_TOKEN=123:abc ./hack/deploy-gateway-kind.sh
+STOP_LOCAL_GATEWAY=1 ACTOR_TEMPLATE=pi-local \
+  PI_TELEGRAM_TOKEN=123:abc ./hack/deploy-gateway-kind.sh
 ```
 
 `deploy-local.sh` builds the actor image, creates a template from the values in
 `provider.env`, writes the API key to a Secret, and grants the atespace access.
 `deploy-gateway-kind.sh` then deploys the one-replica gateway and discovers the
 Telegram chat id on first use.
+
+Only one process may consume updates for a Telegram token. Stop any other
+gateway polling that bot before reusing it. `STOP_LOCAL_GATEWAY=1` removes this
+repository's launchd job, but cannot stop processes outside the repository.
+Test a new bot first if you need to keep the current deployment running.
 
 ### Provider settings
 
@@ -104,91 +123,76 @@ A single model call needs five values. They live in
 | `PI_PROVIDER` | Provider id Pi passes as `--provider` |
 | `PI_MODEL` | Model id Pi passes as `--model` |
 | `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1` |
-| `PI_PROVIDER_API` | Wire protocol: `openai-completions` or `anthropic-messages` |
+| `PI_PROVIDER_API` | Wire protocol: `openai-completions`, `openai-responses`, or `anthropic-messages` |
 | `PI_PROVIDER_API_KEY` | Key, written to a Kubernetes Secret and injected on egress |
 
 Pi defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
 `PI_MODEL_CONTEXT_WINDOW` or `PI_MODEL_MAX_TOKENS` only when the model differs.
 
-The endpoint and API go into the actor template. The key does not: the actor
-sends a placeholder header, which the EgressPolicy replaces with the value
-from the Secret. The header follows the wire API: `Authorization: Bearer` for
-OpenAI-compatible endpoints, `x-api-key` for Anthropic-compatible ones.
+The actor never receives the key. Egress replaces a placeholder header with
+the Secret value, and egress is default-deny. Use `https:` for a TLS provider.
+See [deployment notes](docs/deployment.md) for actor settings, credential
+details, and snapshots.
 
 ### Talk to it
 
-Deploy the gateway into kind with the Telegram bot token:
+Deploy the gateway into the cluster with the Telegram bot token:
 
 ```sh
-PI_TELEGRAM_TOKEN=123:abc ./hack/deploy-gateway-kind.sh
+ACTOR_TEMPLATE=pi-local PI_TELEGRAM_TOKEN=123:abc \
+  PI_GATEWAY_ENV_FILE=deploy/local/gateway.local.env \
+  ./hack/deploy-gateway-kind.sh
 ```
 
-On the first run the script waits for you to send the bot any message, discovers
-the chat id, writes `deploy/local/gateway.env`, then builds and deploys the
-gateway. Later runs reuse that file. Set `STOP_LOCAL_GATEWAY=1` when replacing
-a workstation poller.
+On the first run the script waits for a message, discovers the chat id, writes
+the env file, then builds and deploys the gateway. Later runs reuse that file.
+Set `STOP_LOCAL_GATEWAY=1` when replacing a gateway process on the workstation.
 
-The gateway owns the Telegram long poll and conversation log; the actor remains
-a suspendable Substrate workload.
+The script loads the env file before reading `PI_TELEGRAM_TOKEN` and
+`PI_TELEGRAM_CHATS`, so switching bots needs a new file. Pass the same
+`ACTOR_TEMPLATE` on later runs.
 
-The Deployment consists of a ServiceAccount, a PVC for the conversation log, a
-Secret for the bot token, and RBAC for the shared `ate-client` identity. The
-PVC is what keeps the conversation log across pod restarts.
-
-The Pod reads the router directly at
-`ws://atenet-router.ate-system.svc:80`; no `kubectl port-forward` is needed.
-Conversation logs live on the `pi-gateway-data` PVC. To check the deployment:
+The gateway owns the Telegram long poll and conversation log. Check the
+deployment:
 
 ```sh
 kubectl -n pi-agents get deploy pi-gateway
 kubectl -n pi-agents logs deploy/pi-gateway -f
-kubectl -n pi-agents exec deploy/pi-gateway -- \
-  curl -sS http://127.0.0.1:8788/metrics
 ```
 
 Verify the deployment with a real turn:
 
 ```sh
 set -a
-. deploy/local/gateway.env
+. deploy/local/gateway.local.env
 set +a
 TELEGRAM_CHAT="${PI_TELEGRAM_CHATS}" ./hack/verify-gateway-kind.sh
 ```
 
-For a local gateway process instead of a Deployment, see
-[docs/dev/local-gateway.md](docs/dev/local-gateway.md).
-
-The gateway also accepts a direct HTTP request:
+For an HTTP client on this workstation, forward the gateway Service:
 
 ```sh
-curl -s localhost:8788/messages \
+kubectl -n pi-agents port-forward svc/pi-gateway 8788:8788
+```
+
+In another terminal, send a turn. The endpoint accepts only `POST`:
+
+```sh
+curl -sS -X POST localhost:8788/messages \
   -H 'content-type: application/json' \
   -d '{"conversation":"local/chat","text":"say hello"}'
 # {"conversation":"local/chat","messageId":"...","text":"..."}
 ```
 
-### Troubleshooting
+The HTTP server has no authentication. The Service is ClusterIP, so expose it
+only through a trusted port-forward or an authenticated proxy.
 
-First separate the layers:
+For a local gateway process instead of a Deployment, see
+[docs/dev/local-gateway.md](docs/dev/local-gateway.md). It needs
+`PI_EGRESS_POLICY=bin/egress-policy.yaml` for a real provider; the default
+policy only admits the mock model.
 
-- No Telegram message in the conversation log: the gateway is not polling, or
-  the chat is filtered by `PI_TELEGRAM_CHATS`.
-- `inbound` but no `job_dispatched`: the gateway queue is not moving.
-- `job_dispatched` but no `outbound`: check the actor, router, and provider.
-- `job_failed`: read the `error` field in the conversation log.
-
-Start with:
-
-```sh
-kubectl -n pi-agents logs deploy/pi-gateway --tail=200
-kubectl -n pi-agents exec deploy/pi-gateway -- \
-  /usr/local/bin/kubectl-ate get actors -a pi-agents
-```
-
-The conversation log lives under
-`/data/accounts/telegram/channels/<chat-id>/channel.jsonl` in the gateway Pod.
-For a `503` after `job_dispatched`, inspect the router and worker logs before
-changing the gateway deployment.
+If a turn fails, see [troubleshooting](docs/troubleshooting.md).
 
 ## Configuration
 
@@ -204,6 +208,9 @@ changing the gateway deployment.
 | `PI_TELEGRAM_TOKEN` | unset | Enables the Telegram entry point |
 | `PI_TELEGRAM_CHATS` | any | Comma-separated chat ids to answer |
 | `KUBECTL_ATE` / `KUBE_CONTEXT` | from `PATH` | Control plane access |
+| `PI_ATESPACE` | `pi-agents` | Atespace for actors and egress policies |
+
+Actor settings are in [deployment notes](docs/deployment.md).
 
 ## How it works
 
@@ -220,11 +227,11 @@ rather than draining it, and nothing reconnects on its own, because connecting
 is what wakes an actor.
 
 Protocol, state machines, and the reasoning behind each choice are in
-[docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](docs/architecture.md). Deployment internals and snapshot
+behavior are in [deployment notes](docs/deployment.md).
 
 ## Development
 
 ```sh
-npm install
 npm test
 ```

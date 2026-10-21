@@ -2,8 +2,7 @@
 #
 # Build and deploy the always-on Telegram gateway into kind.
 #
-# The gateway runs as a one-replica Deployment so it owns the single Telegram
-# long-poll connection, and a PVC keeps the conversation log across pod restarts.
+# One replica owns Telegram's long poll. A PVC preserves the conversation log.
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

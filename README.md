@@ -95,10 +95,8 @@ an answer; empty answers any chat.
 
 ### Run the gateway in kind
 
-The gateway belongs in the cluster: it owns the Telegram long poll and the
-conversation log, while the actor remains a suspendable Substrate workload.
-The local deployment creates the provider policy and `pi-local2` template;
-then deploy the gateway as a one-replica Deployment with a PVC:
+The gateway owns the Telegram long poll and conversation log. The actor remains
+a suspendable Substrate workload. Deploy the gateway as one replica with a PVC:
 
 ```sh
 cp deploy/local/gateway.env.example deploy/local/gateway.env
@@ -106,10 +104,9 @@ $EDITOR deploy/local/gateway.env  # PI_TELEGRAM_TOKEN and PI_TELEGRAM_CHATS
 STOP_LOCAL_GATEWAY=1 ./hack/deploy-gateway-kind.sh
 ```
 
-The script builds and pushes the gateway image, writes the bot token to a
-Secret, applies RBAC that lets the Pod mint the shared `ate-client` token,
-and waits for the Deployment. `STOP_LOCAL_GATEWAY=1` also stops the workstation
-launchd service so two pollers never consume the same Telegram updates.
+The script builds the image, stores the token in a Secret, and grants the Pod
+the RBAC needed to mint the shared `ate-client` token. Set
+`STOP_LOCAL_GATEWAY=1` when replacing a workstation poller.
 
 The Pod reads the router directly at
 `ws://atenet-router.ate-system.svc:80`; no `kubectl port-forward` is needed.

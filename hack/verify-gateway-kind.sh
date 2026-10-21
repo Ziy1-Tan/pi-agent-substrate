@@ -15,7 +15,7 @@ need jq
 "${kube[@]}" exec deploy/pi-gateway -- /usr/local/bin/kubectl-ate get actors -a "${ATESPACE}" >/dev/null
 "${kube[@]}" exec deploy/pi-gateway -- curl -fsS http://127.0.0.1:8788/metrics >/dev/null
 
-# Exercise the actor and channel path without pretending to be a Telegram user.
+# Exercise the actor and outbound Telegram channel without a user update.
 body="$(jq -nc --arg conversation "telegram/${TELEGRAM_CHAT}" \
   --arg messageId "cluster-gateway-verify-$(date +%s)" \
   '{conversation: $conversation, text: "请只回复：cluster gateway ok",

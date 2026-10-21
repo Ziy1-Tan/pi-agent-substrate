@@ -93,6 +93,44 @@ PI_TELEGRAM_TOKEN=123:abc PI_TELEGRAM_CHATS=42 \
 Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
 an answer; empty answers any chat.
 
+### Run the gateway in kind
+
+The gateway belongs in the cluster: it owns the Telegram long poll and the
+conversation log, while the actor remains a suspendable Substrate workload.
+The local deployment creates the provider policy and `pi-local2` template;
+then deploy the gateway as a one-replica Deployment with a PVC:
+
+```sh
+cp deploy/local/gateway.env.example deploy/local/gateway.env
+$EDITOR deploy/local/gateway.env  # PI_TELEGRAM_TOKEN and PI_TELEGRAM_CHATS
+STOP_LOCAL_GATEWAY=1 ./hack/deploy-gateway-kind.sh
+```
+
+The script builds and pushes the gateway image, writes the bot token to a
+Secret, applies RBAC that lets the Pod mint the shared `ate-client` token,
+and waits for the Deployment. `STOP_LOCAL_GATEWAY=1` also stops the workstation
+launchd service so two pollers never consume the same Telegram updates.
+
+The Pod reads the router directly at
+`ws://atenet-router.ate-system.svc:80`; no `kubectl port-forward` is needed.
+Conversation logs live on the `pi-gateway-data` PVC. To check the deployment:
+
+```sh
+kubectl -n pi-agents get deploy pi-gateway
+kubectl -n pi-agents logs deploy/pi-gateway -f
+kubectl -n pi-agents exec deploy/pi-gateway -- \
+  curl -sS http://127.0.0.1:8788/metrics
+```
+
+The local process remains available for development, but it should not run at
+the same time as the Deployment.
+
+Verify the deployment with a real turn:
+
+```sh
+TELEGRAM_CHAT=42 ./hack/verify-gateway-kind.sh
+```
+
 curl:
 
 ```sh

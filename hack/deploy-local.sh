@@ -276,7 +276,11 @@ cat <<EOF
 
 ==> ready
 
-Start the gateway on this machine:
+The actor and provider are ready. To run Telegram in kind, use:
+
+  ./hack/deploy-gateway-kind.sh
+
+For local development, start the gateway on this machine:
 
   kubectl -n ate-system port-forward svc/atenet-router 8000:80 &
   KUBECTL_ATE=${KUBECTL_ATE} KUBE_CONTEXT=${KUBE_CONTEXT} \\

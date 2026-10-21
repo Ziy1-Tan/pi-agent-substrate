@@ -1,0 +1,212 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pi-gateway
+  namespace: ${ATESPACE}
+---
+# kubectl-ate needs a kubeconfig to mint the ate-client token and discover the
+# service-DNS trust bundle. The token itself is a projected ServiceAccount
+# token; the API server is reached through the in-cluster Service name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pi-gateway-kubeconfig
+  namespace: ${ATESPACE}
+data:
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - name: in-cluster
+      cluster:
+        server: https://kubernetes.default.svc
+        certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    contexts:
+    - name: in-cluster
+      context:
+        cluster: in-cluster
+        user: pi-gateway
+        namespace: ${ATESPACE}
+    current-context: in-cluster
+    users:
+    - name: pi-gateway
+      user:
+        tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pi-gateway
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/portforward"]
+  verbs: ["create", "get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["clustertrustbundles"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pi-gateway
+subjects:
+- kind: ServiceAccount
+  name: pi-gateway
+  namespace: ${ATESPACE}
+roleRef:
+  kind: ClusterRole
+  name: pi-gateway
+  apiGroup: rbac.authorization.k8s.io
+---
+# kubectl-ate defaults to the shared ate-client identity. Scoping the token
+# mint to that one ServiceAccount keeps the gateway from minting arbitrary
+# ServiceAccount tokens.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pi-gateway-ate-client-token
+  namespace: ate-system
+rules:
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  resourceNames: ["ate-client"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pi-gateway-ate-client-token
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: pi-gateway
+  namespace: ${ATESPACE}
+roleRef:
+  kind: Role
+  name: pi-gateway-ate-client-token
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pi-gateway
+  namespace: ${ATESPACE}
+spec:
+  selector:
+    app: pi-gateway
+  ports:
+  - name: http
+    port: 8788
+    targetPort: http
+    protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pi-gateway
+  namespace: ${ATESPACE}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pi-gateway
+  template:
+    metadata:
+      labels:
+        app: pi-gateway
+    spec:
+      serviceAccountName: pi-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: gateway
+        image: ${GATEWAY_IMAGE}
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8788
+        env:
+        - name: PI_ATESPACE
+          value: ${ATESPACE}
+        - name: PI_ACTOR_TEMPLATE
+          value: ${ACTOR_TEMPLATE}
+        - name: PI_EGRESS_POLICY
+          value: /config/egress-policy.yaml
+        - name: PI_ACTOR_URL
+          value: ws://atenet-router.ate-system.svc:80
+        - name: PI_GATEWAY_DATA_DIR
+          value: /data
+        - name: PI_HTTP_HOST
+          value: "0.0.0.0"
+        - name: KUBECTL_ATE
+          value: /usr/local/bin/kubectl-ate
+        - name: KUBECONFIG
+          value: /config/kubeconfig
+        - name: PI_TELEGRAM_CHATS
+          value: "${TELEGRAM_CHATS}"
+        envFrom:
+        - secretRef:
+            name: pi-gateway-telegram
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: http
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pi-gateway-data
+      - name: config
+        projected:
+          sources:
+          - configMap:
+              name: pi-gateway-kubeconfig
+          - configMap:
+              name: pi-gateway-egress
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pi-gateway-data
+  namespace: ${ATESPACE}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

@@ -22,8 +22,13 @@ spec:
     configRef:
       name: microvm
   template:
+    # Worker capacity comes from limits; the scheduler packs by requests.
+    # Keep the CPU request below the limit so the pool fits smaller clusters.
     resources:
       limits:
         cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: 250m
         memory: 2Gi
   workerImage: ${WORKER_IMAGE}

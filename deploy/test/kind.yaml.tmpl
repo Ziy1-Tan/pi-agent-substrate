@@ -21,9 +21,15 @@ spec:
   sandboxClasses:
   - name: gvisor
   template:
+    # Scheduler requests are separate from Substrate worker capacity, which
+    # reads limits only. Keep the CPU request low enough for one node while
+    # preserving 2 CPUs as the actor placement ceiling.
     resources:
       limits:
         cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: 250m
         memory: 2Gi
 ---
 apiVersion: apps/v1

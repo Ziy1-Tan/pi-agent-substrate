@@ -1,4 +1,5 @@
 import type { Channel, OutboundDelivery } from "../types.js";
+import { Api } from "node-telegram-bot-api";
 
 export interface TelegramChannelOptions {
 	botToken: string;
@@ -7,6 +8,8 @@ export interface TelegramChannelOptions {
 	apiBase?: string;
 	/** Streaming edits are rate limited by the platform, so previews wait. */
 	previewIntervalMs?: number;
+	/** Bot API client; tests can inject a transport. */
+	api?: Api;
 	fetchImpl?: typeof fetch;
 }
 
@@ -22,14 +25,20 @@ const TELEGRAM_TEXT_LIMIT = 4_096;
  */
 export class TelegramChannel implements Channel {
 	private readonly options: TelegramChannelOptions;
-	private readonly fetchImpl: typeof fetch;
+	private readonly api: Api;
 	private messageId: number | undefined;
 	private lastPreviewAt = 0;
 	private lastPreviewText = "";
 
 	constructor(options: TelegramChannelOptions) {
 		this.options = options;
-		this.fetchImpl = options.fetchImpl ?? fetch;
+		this.api =
+			options.api ??
+			new Api(options.botToken, {
+				apiRoot: options.apiBase,
+				fetch: options.fetchImpl,
+					maxRetries: 0,
+			});
 	}
 
 	async send(delivery: OutboundDelivery): Promise<string | undefined> {
@@ -86,42 +95,24 @@ export class TelegramChannel implements Channel {
 	}
 
 	private async post(text: string, markTyping = false): Promise<number | undefined> {
-		const result = await this.call("sendMessage", {
+		const result = await this.api.sendMessage({
 			chat_id: this.options.chatId,
 			text,
 			...(markTyping ? {} : { disable_notification: true }),
 		});
-		const messageId = (result as { message_id?: number } | undefined)?.message_id;
-		return messageId;
+		return result.message_id;
 	}
 
 	private async edit(text: string): Promise<number | undefined> {
 		if (this.messageId === undefined) return undefined;
-		const result = await this.call("editMessageText", {
+		const result = await this.api.editMessageText({
 			chat_id: this.options.chatId,
 			message_id: this.messageId,
 			text,
 		});
 		// Telegram answers an edit with the message, or `true` when nothing
 		// changed; either way the id we already hold stays valid.
-		if (typeof result === "object" && result !== null && "message_id" in result) {
-			return (result as { message_id: number }).message_id;
-		}
-		return this.messageId;
-	}
-
-	private async call(method: string, body: Record<string, unknown>): Promise<unknown> {
-		const base = this.options.apiBase ?? "https://api.telegram.org";
-		const response = await this.fetchImpl(`${base}/bot${this.options.botToken}/${method}`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(body),
-		});
-		const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: unknown; description?: string };
-		if (!response.ok || payload.ok === false) {
-			throw new Error(`telegram ${method} failed: ${payload.description ?? response.status}`);
-		}
-		return payload.result;
+		return typeof result === "object" && result !== null ? result.message_id : this.messageId;
 	}
 }
 

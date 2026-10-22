@@ -20,6 +20,7 @@
 		"typescript": "^5.7.0"
 	},
 	"dependencies": {
+		"node-telegram-bot-api": "^2.1.0",
 		"ws": "^8.22.0"
 	}
 }

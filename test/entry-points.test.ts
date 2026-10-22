@@ -127,7 +127,7 @@ test("metrics are served and unknown paths are not", async (t) => {
 });
 
 test("a telegram chat becomes its own conversation and replies in the chat", async (t) => {
-	const api = telegramApi();
+	const api = telegramApi({ conflictOnce: true });
 	const root = await mkdtemp(join(tmpdir(), "pi-entry-telegram-"));
 	const manager = new GatewayManager({
 		dataDir: root,
@@ -152,6 +152,7 @@ test("a telegram chat becomes its own conversation and replies in the chat", asy
 		botToken: "token",
 		apiBase: "http://telegram.test",
 		fetchImpl: api.fetchImpl,
+		pollRetryDelayMs: 0,
 		specFor: (conversationId) => ({
 			conversationId,
 			idleMs: 60_000,
@@ -164,6 +165,7 @@ test("a telegram chat becomes its own conversation and replies in the chat", asy
 	assert.ok(sends.length > 0, "the bot replied in the chat");
 	assert.equal(sends.at(-1)?.body.chat_id, "42");
 	assert.match(String(sends.at(-1)?.body.text), /Reply: hello from telegram/);
+	assert.equal(api.calls.filter((call) => call.method === "getUpdates").length >= 2, true, "the poller recovered from 409");
 });
 
 interface Api {
@@ -172,16 +174,24 @@ interface Api {
 }
 
 /** A Bot API stand-in: getUpdates yields one message, sends are recorded. */
-function telegramApi(): Api {
+function telegramApi(options: { conflictOnce?: boolean } = {}): Api {
 	const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
 	let delivered = false;
+	let conflicted = false;
 	let nextId = 500;
 	const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = String(input);
 		const method = url.slice(url.lastIndexOf("/") + 1);
-		const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+		const body = Object.fromEntries(new URLSearchParams(String(init?.body ?? "")));
 		calls.push({ method, body });
 		if (method === "getUpdates") {
+			if (options.conflictOnce && !conflicted) {
+				conflicted = true;
+				return Response.json(
+					{ ok: false, error_code: 409, description: "Conflict: terminated by other getUpdates request" },
+					{ status: 409 },
+				);
+			}
 			if (delivered) {
 				// Block until the caller aborts, like a real long poll.
 				await new Promise((resolve) => setTimeout(resolve, 50));

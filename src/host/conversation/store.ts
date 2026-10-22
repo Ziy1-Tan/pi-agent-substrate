@@ -35,9 +35,7 @@ function safeSegment(value: string): string {
 }
 
 /**
- * Lays out a conversation's directory. `account/channel` ids keep the
- * `accounts/<account>/channels/<channel>` tree earlier gateways wrote, so an
- * existing `channel.jsonl` is found where it was left.
+ * Lays out a conversation's directory under `accounts/<account>/channels/<channel>`.
  */
 export async function createConversation(rootDir: string, conversationId = "test/chat"): Promise<Conversation> {
 	const [accountId, channelKey] = conversationId.split("/");
@@ -309,13 +307,11 @@ export function lockOwner(): string {
 
 /**
  * Takes the lock file, or takes it over when the process named in it is gone.
- * `pi-chat-<pid>-` is the owner format earlier gateways wrote, so a lock left
- * by one of them is recognised as stale too.
  */
 async function acquireLock(lockPath: string, owner: string): Promise<void> {
 	if (await createLock(lockPath, owner)) return;
 	const existing = (await readFile(lockPath, "utf8")).trim();
-	const pid = Number(existing.match(/^(?:gateway|pi-chat)-(\d+)-/)?.[1]);
+	const pid = Number(existing.match(/^gateway-(\d+)-/)?.[1]);
 	if (Number.isFinite(pid) && !isAlive(pid)) {
 		await unlink(lockPath).catch(() => undefined);
 		if (await createLock(lockPath, owner)) return;

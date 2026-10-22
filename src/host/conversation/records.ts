@@ -1,9 +1,4 @@
-/**
- * The shapes a conversation's `channel.jsonl` holds and the inputs that become
- * them. Logs written before the store moved into this repository carry extra
- * fields (`service`, `channelId`, `mentionedBot`, ...) and two record types
- * (`checkpoint`, `error`) nothing reads any more; both are ignored on read.
- */
+/** Record shapes for `channel.jsonl`, and the inputs that become records. */
 
 export type AttachmentKind = "image" | "file" | "audio" | "video";
 

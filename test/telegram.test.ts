@@ -20,7 +20,7 @@ function telegramStub(): {
 	const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = String(input);
 		const method = url.slice(url.lastIndexOf("/") + 1);
-		const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+		const body = Object.fromEntries(new URLSearchParams(String(init?.body ?? "")));
 		calls.push({ method, body });
 		if (fail) {
 			fail = false;

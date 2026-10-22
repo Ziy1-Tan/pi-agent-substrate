@@ -1,8 +1,8 @@
 # Always-on Pi agents on Agent Substrate
 
-Combine a conversation log derived from pi-chat's, always-on-agent's idle
-suspension policy, and Substrate's suspendable actors to run `pi --mode rpc`
-inside an actor: a Pi agent that stays connected but only computes on demand.
+This project runs `pi --mode rpc` inside a Substrate actor. A durable
+conversation log and idle policy keep the agent reachable between turns without
+leaving a worker assigned.
 
 ## Problem
 
@@ -10,10 +10,9 @@ Personal agents are used in bursts. You talk for a few turns, leave, and come
 back hours later. The agent is idle almost the whole time, but you want it to
 stay online. Neither a resident local process (holds resources, dies with the
 laptop, no isolation) nor Substrate's task-driven shape (synchronous HTTP
-`/submit`, no streaming, no connection, explicit suspend) nor pi-chat (a local
-micro-VM and tmux worker per channel, no suspension) covers that.
+`/submit`, no streaming, no connection, explicit suspend) covers that.
 
-Three platform constraints compound this: Substrate has no exec/attach, so a
+Three platform limits shape the design: Substrate has no exec/attach, so a
 standard Pi or Claude TUI cannot reach a remote actor; the platform does not
 detect idleness; and suspension drops connections, so a restore must reconnect
 and re-align state.
@@ -23,7 +22,7 @@ and re-align state.
 | Layer | Role | Source |
 |---|---|---|
 | Channel | Where the human speaks | The curl and Telegram adapters in `src/host/channel/` |
-| Gateway | Conversation log, delivery, and lifecycle decisions | The log derives from pi-chat's runtime; `src/host/substrate/` follows always-on-agent's provisioner and idle-suspender split |
+| Gateway | Conversation log, delivery, and lifecycle decisions | `src/host/gateway.ts`, `src/host/conversation/`, and `src/host/substrate/` |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
 | Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
 

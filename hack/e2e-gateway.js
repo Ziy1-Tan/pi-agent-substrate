@@ -66,6 +66,7 @@ async function main() {
 			...process.env,
 			PI_GATEWAY_DATA_DIR: dataDir,
 			PI_HTTP_PORT: String(port),
+			PI_INGRESS_MODE: "proxy",
 			PI_ACTOR_URL: `ws://${new URL(router).host}`,
 			PI_ATESPACE: atespace,
 			PI_ACTOR_TEMPLATE: actorTemplate,

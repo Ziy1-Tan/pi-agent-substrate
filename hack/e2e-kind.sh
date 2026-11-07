@@ -26,6 +26,9 @@
 #   PI_PROVIDER_BASE_URL / PI_PROVIDER_API
 #                     endpoint and wire protocol for a real provider
 #   EGRESS_POLICY     manifest applied to the actor (default: the mock policy)
+#   SANDBOX_CLASS_NAME  gvisor (default) or microvm
+#   SANDBOX_CONFIG_NAME SandboxConfig name (default: gvisor-default or microvm)
+#   WORKER_IMAGE      worker image (default: copy an existing pool of the class)
 #   ONLY              "deploy" to skip the e2e, "e2e" to skip the deploy
 set -o errexit -o nounset -o pipefail
 
@@ -44,6 +47,13 @@ HTTP_PORT="${HTTP_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
 PROVIDER="${PROVIDER:-mock}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/test/egress-policy.yaml}"
+SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-gvisor}"
+if [[ -z "${SANDBOX_CONFIG_NAME:-}" ]]; then
+  case "${SANDBOX_CLASS_NAME}" in
+    gvisor) SANDBOX_CONFIG_NAME=gvisor-default ;;
+    *) SANDBOX_CONFIG_NAME="${SANDBOX_CLASS_NAME}" ;;
+  esac
+fi
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -104,22 +114,25 @@ if [[ "${ONLY}" != "e2e" ]]; then
     WORKER_IMAGE="$("${kube[@]}" get workerpools -A -o json 2>/dev/null | node -e '
       let body = "";
       process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
+        const [className] = process.argv.slice(1);
         const pools = JSON.parse(body).items ?? [];
-        const gvisor = pools.find((pool) =>
-          (pool.spec?.sandboxClasses ?? []).some((entry) => entry.name === "gvisor"),
+        const pool = pools.find((entry) =>
+          (entry.spec?.sandboxClasses ?? []).some((sandbox) => sandbox.name === className),
         );
-        process.stdout.write(gvisor?.spec?.workerImage ?? "");
-      });')"
+        process.stdout.write(pool?.spec?.workerImage ?? "");
+      });' "${SANDBOX_CLASS_NAME}")"
   fi
   if [[ -z "${WORKER_IMAGE}" ]]; then
-    echo "no existing gVisor WorkerPool to copy workerImage from; set WORKER_IMAGE" >&2
+    echo "no existing ${SANDBOX_CLASS_NAME} WorkerPool to copy workerImage from; set WORKER_IMAGE" >&2
     exit 1
   fi
 
   echo "==> applying namespace and worker pool"
   mkdir -p bin
   WORKER_IMAGE="${WORKER_IMAGE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
-    envsubst '${WORKER_IMAGE} ${MOCK_LLM_IMAGE}' < deploy/test/kind.yaml.tmpl | "${kube[@]}" apply -f -
+    SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME}" \
+    envsubst '${WORKER_IMAGE} ${MOCK_LLM_IMAGE} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME}' \
+    < deploy/test/kind.yaml.tmpl | "${kube[@]}" apply -f -
 
   if [[ "${PROVIDER}" == "mock" ]]; then
     "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
@@ -145,8 +158,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
       -e "s#\${API}#${PI_PROVIDER_API}#" \
       -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
       -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
-      -e "s#\${SANDBOX_CLASS}#SANDBOX_CLASS_GVISOR#" \
-      -e "s#\${SANDBOX_CONFIG}#gvisor-default#" \
+      -e "s#\${SANDBOX_CLASS_NAME}#${SANDBOX_CLASS_NAME}#" \
       deploy/test/actor-template.json.tmpl > bin/actor-template.json
   # The manifest is YAML-shaped, so rename through it before applying it.
   sed -i.bak -e "s#^  name: pi-actor\$#  name: ${ACTOR_TEMPLATE}#" -e "s#^  atespace: pi-agents\$#  atespace: ${ATESPACE}#" \
@@ -176,7 +188,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
   stale="$(stale_actors)"
   while IFS= read -r name; do
     [[ -n "${name}" ]] || continue
-    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor "${name}" -a "${ATESPACE}" --any-state >/dev/null
+    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor "${name}" -a "${ATESPACE}" >/dev/null
     echo "    removed actor ${name}, left over from an earlier run"
   done <<< "${stale}"
   if "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get actor-template -a "${ATESPACE}" "${ACTOR_TEMPLATE}" >/dev/null 2>&1; then
@@ -202,18 +214,22 @@ if [[ "${ONLY}" != "e2e" ]]; then
   # to table/json/yaml here, so presence is tested against table output.
   if "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get actor "${ACTOR}" -a "${ATESPACE}" 2>/dev/null | grep -q "${ACTOR}"; then
     echo "    removing actor ${ACTOR}, left over from an earlier run"
-    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor "${ACTOR}" -a "${ATESPACE}" --any-state
+    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor "${ACTOR}" -a "${ATESPACE}"
   fi
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor "${ACTOR}" -a "${ATESPACE}" --template "${ACTOR_TEMPLATE}"
 fi
 
 if [[ "${ONLY}" != "deploy" ]]; then
-  echo "==> port-forwarding the router on 8000"
-  "${kube[@]}" -n ate-system port-forward svc/atenet-router 8000:80 >/tmp/pi-e2e-portforward.log 2>&1 &
+  # v1.0.0's router only exposes mTLS listeners. The local e2e uses the
+  # kubectl-ate CONNECT proxy, which mints a client certificate and resumes
+  # the actor when the tunnel opens.
+  echo "==> proxying ${ATESPACE}/${ACTOR} on 8000"
+  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} \
+    proxy actor "${ACTOR}" -a "${ATESPACE}" 8000:80 >/tmp/pi-e2e-proxy.log 2>&1 &
   forward=$!
   trap 'kill ${forward} 2>/dev/null || true' EXIT
   for _ in $(seq 1 30); do
-    if curl -sf -o /dev/null "http://127.0.0.1:8000/" -H "ate-target-actor: ${ATESPACE}/${ACTOR}" 2>/dev/null; then break; fi
+    if curl -sf -o /dev/null "http://127.0.0.1:8000/" 2>/dev/null; then break; fi
     sleep 1
   done
 

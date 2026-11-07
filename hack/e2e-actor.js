@@ -171,7 +171,7 @@ async function main() {
  */
 async function cleanup() {
 	try {
-		await ate("delete", "actor", actor, "-a", atespace, "--any-state");
+		await ate("delete", "actor", actor, "-a", atespace);
 		log(`removed actor ${atespace}/${actor}`);
 	} catch (error) {
 		// A failed run may already have removed it, or never created it.

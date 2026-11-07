@@ -51,7 +51,7 @@ export async function actorState(client, name) {
 export async function removeActor(client, name, log) {
 	if ((await actorState(client, name)) === undefined) return;
 	try {
-		await client.ate("delete", "actor", name, "-a", client.atespace, "--any-state");
+		await client.ate("delete", "actor", name, "-a", client.atespace);
 		log(`removed actor ${name}`);
 	} catch (error) {
 		log(`could not remove actor ${name}: ${error instanceof Error ? error.message : String(error)}`);

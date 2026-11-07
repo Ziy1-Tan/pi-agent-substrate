@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { createConversation } from "../src/host/conversation/store.js";
-import { Gateway, GatewayAbort } from "../src/host/gateway.js";
-import type { GatewayHooks } from "../src/host/types.js";
+import { createConversation } from "../src/gateway/conversation/store.js";
+import { Gateway, GatewayAbort } from "../src/gateway/gateway.js";
+import type { GatewayHooks } from "../src/gateway/types.js";
 import { readRecords, recordTypes } from "./support/records.js";
 import { StubBackend } from "./support/stub-backend.js";
 import { TestChannel } from "./support/test-channel.js";

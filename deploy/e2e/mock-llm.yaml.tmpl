@@ -1,40 +1,10 @@
-# Namespace, worker pool, mock LLM, and actor template for the clustered e2e.
-#
-# The WorkerPool class is chosen by hack/e2e-kind.sh: gvisor on a cluster
-# without nested virtualization, microvm on this workstation's KVM-capable
-# nodes. The actor template is a substrate resource created through the ate
-# API, not a CRD; hack/e2e-kind.sh applies it.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: pi-agents
----
-apiVersion: ate.dev/v1
-kind: WorkerPool
-metadata:
-  name: pi-workerpool
-  namespace: pi-agents
-  labels:
-    workload: pi
-    sandboxClass: ${SANDBOX_CLASS_NAME}
-spec:
-  replicas: 1
-  workerImage: ${WORKER_IMAGE}
-  sandboxClasses:
-  - name: ${SANDBOX_CLASS_NAME}
-    configRef:
-      name: ${SANDBOX_CONFIG_NAME}
-  template:
-    resources:
-      limits:
-        cpu: "2"
-        memory: 2Gi
----
+# Mock LLM for the clustered e2e. The namespace and WorkerPool come from
+# deploy/workerpool.yaml.tmpl, which scripts/e2e/kind.sh applies first.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mock-llm
-  namespace: pi-agents
+  namespace: ${ATESPACE}
 spec:
   replicas: 1
   selector:
@@ -69,7 +39,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mock-llm
-  namespace: pi-agents
+  namespace: ${ATESPACE}
 spec:
   selector:
     app: mock-llm

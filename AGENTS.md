@@ -67,7 +67,7 @@ ConfigMap once at startup, so restart the deployment after editing.
 A template name and an actor name may not contain dots: `pi-local-v1.0.0` is
 rejected with `must not contain dots`. Use dashes (`pi-local-v1-0-0`).
 
-`deploy/test/actor-template.json.tmpl` follows the v1.0.0 protojson schema:
+`deploy/e2e/actor-template.json.tmpl` follows the v1.0.0 protojson schema:
 no `sandboxConfig`, no `snapshotConfig.storageLocation` (it needs the
 `PerTemplateSnapshotLocation` preview gate), and limits in integer units
 (`cpuMillicores`, `memoryBytes`), not Kubernetes quantities. The sandbox class
@@ -75,7 +75,7 @@ is selected by `workerSelector.matchLabels`, matched against the WorkerPool's
 labels; there is no template field for it. WorkerPools are `ate.dev/v1`.
 
 `kubectl ate delete actor` no longer accepts `--any-state`. The old
-`hack/install-ate-kind.sh` and `hack/create-kind-cluster.sh` are gone; install
+The old install and cluster-creation scripts are gone; install
 Substrate with its own `ate-setup` command.
 
 ## Templates
@@ -177,7 +177,7 @@ that `resourceName`.
 
 The projected credential bundle is one PEM with the private key first and the
 certificate chain second. Node rejects that file as `cert` with
-`PEM routines::no start line`; `src/host/websocket.ts` splits the blocks on
+`PEM routines::no start line`; `src/gateway/websocket.ts` splits the blocks on
 every connect so a rotated credential is picked up.
 
 `kubectl ate proxy actor` is the workstation path. It mints a certificate for
@@ -186,7 +186,7 @@ the `atenet-client` SA, so the router's allowlist needs that SPIFFE ID too.
 
 ## Local deployment
 
-`hack/deploy-local.sh` builds the actor and gateway images, creates the
+`scripts/deploy-local.sh` builds the actor and gateway images, creates the
 atespace, the WorkerPool, the template (`pi-local-v1-0-0` by default), the
 provider Secret, the atespace's credential-provider grant, the actor, and the
 in-cluster gateway. The provider values come from `deploy/local/provider.env`;

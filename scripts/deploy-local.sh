@@ -58,8 +58,8 @@ set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
-# shellcheck source=hack/lib.sh
-. "${ROOT}/hack/lib.sh"
+# shellcheck source=scripts/lib.sh
+. "${ROOT}/scripts/lib.sh"
 
 SUBSTRATE_VERSION="${SUBSTRATE_VERSION:-$(node -p "require('./package.json').substrateVersion")}"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
@@ -187,7 +187,7 @@ ATESPACE="${ATESPACE}" WORKERPOOL_NAME="${WORKERPOOL_NAME}" \
   SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME}" \
   WORKER_IMAGE="${WORKER_IMAGE}" \
   envsubst '${ATESPACE} ${WORKERPOOL_NAME} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME} ${WORKER_IMAGE}' \
-  < deploy/local/workerpool.yaml.tmpl | "${kube[@]}" apply -f -
+  < deploy/workerpool.yaml.tmpl | "${kube[@]}" apply -f -
 "${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=300s
 
 # `read` needs a terminating newline: without one it returns non-zero and

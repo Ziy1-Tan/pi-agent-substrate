@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 import WebSocket from "ws";
 
-import { startBridge, type Bridge } from "../../src/sandbox/bridge.js";
+import { startBridge, type Bridge } from "../../src/actor/bridge.js";
 
 /**
  * A minimal OpenAI-compatible chat server for the bridge tests. It streams a

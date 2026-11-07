@@ -5,11 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { startHttpServer, type HttpServer } from "../src/host/channel/server.js";
-import { TelegramChannel } from "../src/host/channel/telegram.js";
-import { TelegramPoll } from "../src/host/channel/telegram-poll.js";
-import { GatewayManager } from "../src/host/manager.js";
-import { ActorProvisioner } from "../src/host/substrate/provisioner.js";
+import { startHttpServer, type HttpServer } from "../src/gateway/channel/server.js";
+import { TelegramChannel } from "../src/gateway/channel/telegram.js";
+import { TelegramPoll } from "../src/gateway/channel/telegram-poll.js";
+import { GatewayManager } from "../src/gateway/manager.js";
+import { ActorProvisioner } from "../src/gateway/substrate/provisioner.js";
 
 /** Actors that already exist and never leave the running state. */
 function idleActors(): ActorProvisioner {

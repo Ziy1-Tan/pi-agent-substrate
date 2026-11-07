@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PiBackend, type ActorTransport } from "../src/host/backend.js";
-import { WebSocketTransport } from "../src/host/websocket.js";
+import { PiBackend, type ActorTransport } from "../src/gateway/backend.js";
+import { WebSocketTransport } from "../src/gateway/websocket.js";
 
 /** A transport whose connection can be dropped by the test. */
 class DoorTransport implements ActorTransport {

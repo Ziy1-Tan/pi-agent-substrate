@@ -1,7 +1,7 @@
 # The worker image is the ateworker-<class> build that matches the installed
-# substrate. Render with ATESPACE, SANDBOX_CLASS_NAME, SANDBOX_CONFIG_NAME, and
-# WORKER_IMAGE set. A microVM pool only schedules on a node that advertises
-# ate.dev/kvm.
+# substrate. Render with ATESPACE, WORKERPOOL_NAME, SANDBOX_CLASS_NAME,
+# SANDBOX_CONFIG_NAME, and WORKER_IMAGE set. A microVM pool only schedules on a
+# node that advertises ate.dev/kvm.
 #
 # ActorTemplate.workerSelector matches the sandboxClass label, so a pool of
 # this class is chosen even when the cluster runs both classes.

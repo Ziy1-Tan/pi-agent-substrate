@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { GatewayManager } from "../src/host/manager.js";
-import { ActorProvisioner, actorNameFor } from "../src/host/substrate/provisioner.js";
+import { GatewayManager } from "../src/gateway/manager.js";
+import { ActorProvisioner, actorNameFor } from "../src/gateway/substrate/provisioner.js";
 
 async function tempRoot(t: test.TestContext): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "pi-manager-"));

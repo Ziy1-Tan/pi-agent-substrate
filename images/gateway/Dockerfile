@@ -1,5 +1,5 @@
 # Gateway image: the always-on Pi gateway plus the kubectl-ate CLI it uses to
-# manage actors. bin/kubectl-ate is filled by hack/deploy-local.sh from the
+# manage actors. bin/kubectl-ate is filled by scripts/deploy-local.sh from the
 # kubectl-ate on PATH, so the image matches the installed substrate release.
 FROM node:22-bookworm-slim
 
@@ -12,4 +12,4 @@ RUN chmod 0755 /usr/local/bin/kubectl-ate
 
 ENV NODE_ENV=production
 EXPOSE 8788
-CMD ["node", "/app/dist/src/host/main.js"]
+CMD ["node", "/app/dist/src/gateway/main.js"]

@@ -13,18 +13,18 @@
  *   6. read the file back and assert the session still has the first turn
  *
  * Everything is a real external call; nothing is stubbed. Requires the
- * templates and worker pool from hack/e2e-kind.sh.
+ * templates and worker pool from scripts/e2e/kind.sh.
  */
 import { createHash } from "node:crypto";
 
 import WebSocket from "ws";
 
-import { actorState as readActorState, ateClient, createChecks, waitFor } from "./e2e-lib.js";
+import { actorState as readActorState, ateClient, createChecks, waitFor } from "./lib.js";
 
 const { atespace, ate } = ateClient();
 const actor = process.env.PI_ACTOR ?? "pi-actor-1";
 const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
-const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.yaml";
+const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/e2e/egress-policy.yaml";
 
 const log = (message) => console.log(`[actor-e2e] ${message}`);
 const { check, checks } = createChecks(log);

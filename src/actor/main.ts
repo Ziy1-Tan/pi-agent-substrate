@@ -2,7 +2,7 @@
 /**
  * Actor entry point. One process per sandbox:
  *
- *   node dist/src/sandbox/main.js
+ *   node dist/src/actor/main.js
  *
  * Configuration is environment only, because an ActorTemplate carries literal
  * env values and the bridge must not depend on files outside `/workspace`.

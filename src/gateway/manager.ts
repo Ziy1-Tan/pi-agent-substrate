@@ -8,7 +8,7 @@ import { IdleLifecycle } from "./substrate/idle.js";
 import type { ActorRef } from "./substrate/control.js";
 import type { ActorProvisioner } from "./substrate/provisioner.js";
 import { ActorTunnels, type ActorTunnelOptions } from "./substrate/tunnel.js";
-import { Metrics } from "../metrics.js";
+import { Metrics } from "./metrics.js";
 import { WebSocketTransport, type WebSocketTlsOptions } from "./websocket.js";
 
 export interface ConversationSpec {

@@ -22,8 +22,8 @@ and re-align state.
 
 | Layer | Role | Source |
 |---|---|---|
-| Channel | Where the human speaks | The curl and Telegram adapters in `src/host/channel/` |
-| Gateway | Conversation log, delivery, and lifecycle decisions | The log derives from pi-chat's runtime; `src/host/substrate/` follows always-on-agent's provisioner and idle-suspender split |
+| Channel | Where the human speaks | The curl and Telegram adapters in `src/gateway/channel/` |
+| Gateway | Conversation log, delivery, and lifecycle decisions | The log derives from pi-chat's runtime; `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
 | Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
 

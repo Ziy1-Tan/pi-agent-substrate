@@ -22,7 +22,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { actorNameFor, actorState as readActorState, ateClient, createChecks, removeActor, waitFor } from "./e2e-lib.js";
+import { actorNameFor, actorState as readActorState, ateClient, createChecks, removeActor, waitFor } from "./lib.js";
 
 const { atespace, ate } = ateClient();
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 12);
@@ -60,7 +60,7 @@ async function main() {
 	for (const conversationId of conversations) await dropActor(actorNameFor(conversationId, actorPrefix));
 
 	const dataDir = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
-	const gateway = spawn(process.execPath, ["dist/src/host/main.js"], {
+	const gateway = spawn(process.execPath, ["dist/src/gateway/main.js"], {
 		env: {
 			...process.env,
 			PI_GATEWAY_DATA_DIR: dataDir,

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import type { ConversationRecord } from "../../src/host/conversation/records.js";
+import type { ConversationRecord } from "../../src/gateway/conversation/records.js";
 
 export async function readRecords(logPath: string): Promise<ConversationRecord[]> {
 	try {

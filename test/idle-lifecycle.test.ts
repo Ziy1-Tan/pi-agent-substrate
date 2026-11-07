@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { IdleLifecycle } from "../src/host/substrate/idle.js";
+import { IdleLifecycle } from "../src/gateway/substrate/idle.js";
 import type {
 	ActorControl,
 	ActorRef,
@@ -9,7 +9,7 @@ import type {
 	LifecycleClock,
 	LifecycleEvent,
 	LifecycleReason,
-} from "../src/host/substrate/control.js";
+} from "../src/gateway/substrate/control.js";
 
 /** A clock tests advance by hand. */
 class FakeClock implements LifecycleClock {

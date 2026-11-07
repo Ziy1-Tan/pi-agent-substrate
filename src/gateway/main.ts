@@ -25,7 +25,7 @@
  *   PI_ROUTER_KEY          private key for PI_ROUTER_CERT
  *   PI_ACTOR_TEMPLATE      template used to create a missing actor
  *   PI_EGRESS_POLICY       manifest applied to each new actor (default
- *                          `deploy/test/egress-policy.yaml`; empty disables it)
+ *                          `deploy/e2e/egress-policy.yaml`; empty disables it)
  *   PI_IDLE_SECONDS        idle window before suspend (0 disables, default 60)
  *   PI_TELEGRAM_TOKEN      bot token; enables the Telegram entry point
  *   PI_TELEGRAM_CHATS      comma-separated chat ids to answer (default: any)
@@ -44,7 +44,7 @@ import { ActorProvisioner } from "./substrate/provisioner.js";
 
 const ingressMode = process.env.PI_INGRESS_MODE === "proxy" ? "proxy" : "router";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 60);
-const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.yaml";
+const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/e2e/egress-policy.yaml";
 const telegramToken = process.env.PI_TELEGRAM_TOKEN;
 const telegramApi = process.env.PI_TELEGRAM_API;
 const telegramChats = (process.env.PI_TELEGRAM_CHATS ?? "")

@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { PiBackend } from "../src/host/backend.js";
-import { startBridge, type Bridge } from "../src/sandbox/bridge.js";
-import { createConversation } from "../src/host/conversation/store.js";
-import { Gateway } from "../src/host/gateway.js";
-import { WebSocketTransport } from "../src/host/websocket.js";
+import { PiBackend } from "../src/gateway/backend.js";
+import { startBridge, type Bridge } from "../src/actor/bridge.js";
+import { createConversation } from "../src/gateway/conversation/store.js";
+import { Gateway } from "../src/gateway/gateway.js";
+import { WebSocketTransport } from "../src/gateway/websocket.js";
 import { resolvePiBin, startMockLlm, writePiConfig } from "./support/bridge-harness.js";
 import { readRecords, recordTypes } from "./support/records.js";
 import { TestChannel } from "./support/test-channel.js";

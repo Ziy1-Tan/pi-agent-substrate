@@ -67,8 +67,8 @@ without nested virtualization, add `--sandbox-classes=gvisor`.
 ```sh
 cp deploy/local/provider.env.example deploy/local/provider.env
 $EDITOR deploy/local/provider.env     # provider, model, endpoint, API, key
-KUBE_CONTEXT=kind-pi-v1 ./hack/deploy-local.sh                # real model
-KUBE_CONTEXT=kind-pi-v1 SANDBOX_CLASS_NAME=microvm ./hack/e2e-kind.sh   # mock model
+KUBE_CONTEXT=kind-pi-v1 ./scripts/deploy-local.sh                # real model
+KUBE_CONTEXT=kind-pi-v1 SANDBOX_CLASS_NAME=microvm ./scripts/e2e/kind.sh   # mock model
 ```
 
 `deploy-local.sh` builds the actor and gateway images, creates the atespace,
@@ -121,14 +121,14 @@ into the actor:
 
 ```sh
 TELEGRAM_TOKEN=123:abc TELEGRAM_CHATS=42 KUBE_CONTEXT=kind-pi-v1 \
-  ./hack/deploy-local.sh
+  ./scripts/deploy-local.sh
 ```
 
 Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
 an answer; empty answers any chat.
 
 To run the gateway on the workstation instead, use the same environment plus a
-router tunnel and `node dist/src/host/main.js`; see the configuration table.
+router tunnel and `node dist/src/gateway/main.js`; see the configuration table.
 `deploy-local.sh` is the supported path.
 
 ## Configuration
@@ -142,7 +142,7 @@ router tunnel and `node dist/src/host/main.js`; see the configuration table.
 | `PI_ROUTER_CERT` / `PI_ROUTER_KEY` | unset | Client credential for the router's mTLS ingress; may be the same projected bundle |
 | `PI_ATESPACE` | `pi-agents` | Atespace that holds the actors |
 | `PI_ACTOR_TEMPLATE` | `pi-actor` | Template used to create a missing actor |
-| `PI_EGRESS_POLICY` | `deploy/test/egress-policy.yaml` | Applied to each new actor |
+| `PI_EGRESS_POLICY` | `deploy/e2e/egress-policy.yaml` | Applied to each new actor |
 | `PI_IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
 | `PI_HTTP_PORT` | `8788` | HTTP port |
 | `PI_HTTP_HOST` | `127.0.0.1` | Listen address |

@@ -4,7 +4,7 @@
 # already has Agent Substrate installed, then run the clustered e2e.
 #
 # Assumes:
-#   - `hack/create-kind-cluster.sh` and the substrate kind install have run
+#   - a kind cluster with Agent Substrate installed
 #   - local registry on localhost:5001, reachable as a kind node host entry
 #   - kubectl-ate on PATH (or KUBECTL_ATE set)
 #
@@ -32,10 +32,10 @@
 #   ONLY              "deploy" to skip the e2e, "e2e" to skip the deploy
 set -o errexit -o nounset -o pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${ROOT}"
-# shellcheck source=hack/lib.sh
-. "${ROOT}/hack/lib.sh"
+# shellcheck source=scripts/lib.sh
+. "${ROOT}/scripts/lib.sh"
 
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
@@ -48,9 +48,10 @@ IDLE_SECONDS="${IDLE_SECONDS:-15}"
 HTTP_PORT="${HTTP_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
 PROVIDER="${PROVIDER:-mock}"
-EGRESS_POLICY="${EGRESS_POLICY:-deploy/test/egress-policy.yaml}"
+EGRESS_POLICY="${EGRESS_POLICY:-deploy/e2e/egress-policy.yaml}"
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-gvisor}"
 SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLASS_NAME}")}"
+WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool}"
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -94,17 +95,20 @@ if [[ "${ONLY}" != "e2e" ]]; then
     exit 1
   fi
 
-  echo "==> applying namespace and worker pool"
+  echo "==> applying namespace, worker pool, and mock LLM"
   mkdir -p bin
-  WORKER_IMAGE="${WORKER_IMAGE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
+  ATESPACE="${ATESPACE}" WORKERPOOL_NAME="${WORKERPOOL_NAME}" \
     SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME}" \
-    envsubst '${WORKER_IMAGE} ${MOCK_LLM_IMAGE} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME}' \
-    < deploy/test/kind.yaml.tmpl | "${kube[@]}" apply -f -
+    WORKER_IMAGE="${WORKER_IMAGE}" \
+    envsubst '${ATESPACE} ${WORKERPOOL_NAME} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME} ${WORKER_IMAGE}' \
+    < deploy/workerpool.yaml.tmpl | "${kube[@]}" apply -f -
+  ATESPACE="${ATESPACE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
+    envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/e2e/mock-llm.yaml.tmpl | "${kube[@]}" apply -f -
 
   if [[ "${PROVIDER}" == "mock" ]]; then
     "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
   fi
-  "${kube[@]}" -n "${ATESPACE}" rollout status deploy/pi-workerpool --timeout=180s
+  "${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=180s
 
   echo "==> creating the actor template"
   if [[ "${PROVIDER}" == "mock" ]]; then
@@ -192,7 +196,7 @@ if [[ "${ONLY}" != "deploy" ]]; then
   echo "==> running the clustered e2e"
   PI_ATESPACE="${ATESPACE}" PI_ACTOR="${ACTOR}" PI_ROUTER_URL="${ROUTER_URL}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
-    node hack/e2e-actor.js
+    node scripts/e2e/actor.js
 
   echo "==> running the HTTP channel e2e"
   PI_ATESPACE="${ATESPACE}" \
@@ -200,5 +204,5 @@ if [[ "${ONLY}" != "deploy" ]]; then
     PI_ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
     PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_HTTP_PORT="${HTTP_PORT}" \
     PI_E2E_CONVERSATIONS="${CONVERSATIONS}" \
-    node hack/e2e-gateway.js
+    node scripts/e2e/gateway.js
 fi

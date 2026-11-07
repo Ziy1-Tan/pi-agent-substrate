@@ -20,17 +20,15 @@ export interface ActorTunnelOptions {
 }
 
 export interface ActorTunnel {
-	/** Local ws:// URL that forwards to the actor's bridge. */
 	readonly url: string;
 	close(): Promise<void>;
 }
 
 /**
- * Starts one `kubectl-ate proxy actor` for a conversation and returns the
- * local WebSocket URL. The proxy owns the CONNECT tunnel to atenet-router,
- * which resumes a suspended actor when the tunnel is opened.
+ * The proxy owns the CONNECT tunnel to atenet-router, which resumes a
+ * suspended actor when the tunnel is opened.
  */
-export async function startActorTunnel(actor: ActorRef, options: ActorTunnelOptions): Promise<ActorTunnel> {
+async function startActorTunnel(actor: ActorRef, options: ActorTunnelOptions): Promise<ActorTunnel> {
 	const args = [
 		...(options.context ? ["--context", options.context] : []),
 		"proxy",
@@ -53,7 +51,7 @@ export async function startActorTunnel(actor: ActorRef, options: ActorTunnelOpti
  * Addresses are logged by the proxy as
  * `Proxying 127.0.0.1:12345 -> <atespace>/<actor>:80`.
  */
-export function parseProxyAddress(line: string): string | undefined {
+function parseProxyAddress(line: string): string | undefined {
 	const match = /Proxying\s+(\S+)\s+->/.exec(line);
 	return match?.[1];
 }
@@ -109,6 +107,7 @@ function waitForAddress(child: ProxyProcess, description: string): Promise<strin
 		timer.unref?.();
 
 		child.stderr.on("data", (chunk: Buffer) => {
+			if (settled) return;
 			stderr = `${stderr}${chunk.toString()}`.slice(-4096);
 			const address = parseProxyAddress(stderr);
 			if (address) finish(undefined, address);

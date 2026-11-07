@@ -58,6 +58,8 @@ set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
+# shellcheck source=hack/lib.sh
+. "${ROOT}/hack/lib.sh"
 
 SUBSTRATE_VERSION="${SUBSTRATE_VERSION:-$(node -p "require('./package.json').substrateVersion")}"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
@@ -74,12 +76,7 @@ PROVIDER_ENV="${PROVIDER_ENV:-deploy/local/provider.env}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/local/egress-policy.yaml.tmpl}"
 SECRET_NAME="${SECRET_NAME:-pi-provider}"
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-microvm}"
-if [[ -z "${SANDBOX_CONFIG_NAME:-}" ]]; then
-  case "${SANDBOX_CLASS_NAME}" in
-    gvisor) SANDBOX_CONFIG_NAME=gvisor-default ;;
-    *) SANDBOX_CONFIG_NAME="${SANDBOX_CLASS_NAME}" ;;
-  esac
-fi
+SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLASS_NAME}")}"
 WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool-${SANDBOX_CLASS_NAME}}"
 WORKER_IMAGE="${WORKER_IMAGE:-}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
@@ -99,11 +96,7 @@ need node
 need envsubst
 need "${KUBECTL_ATE}"
 
-KUBECTL_ATE_BIN="${KUBECTL_ATE_BIN:-$(command -v "${KUBECTL_ATE}" || true)}"
-if [[ -z "${KUBECTL_ATE_BIN}" ]]; then
-  echo "KUBECTL_ATE_BIN is empty and ${KUBECTL_ATE} is not on PATH" >&2
-  exit 1
-fi
+KUBECTL_ATE_BIN="${KUBECTL_ATE_BIN:-$(command -v "${KUBECTL_ATE}")}"
 ate_version="$("${KUBECTL_ATE}" --version 2>&1 || true)"
 if [[ "${ate_version}" != *"v${SUBSTRATE_VERSION}"* && "${ate_version}" != *"(devel)"* ]]; then
   echo "kubectl-ate is not v${SUBSTRATE_VERSION}: ${ate_version}" >&2
@@ -162,22 +155,7 @@ case "$(uname -m)" in
   aarch64|arm64) ACTOR_ARCH=arm64 ;;
   *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
-ACTOR_INDEX="$(curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
-  "http://${REGISTRY}/v2/pi-actor/manifests/local")" || ACTOR_INDEX=""
-if [[ -z "${ACTOR_INDEX}" ]]; then
-  echo "could not read the image index for ${REGISTRY}/pi-actor:local" >&2
-  exit 1
-fi
-ACTOR_DIGEST="$(printf '%s' "${ACTOR_INDEX}" | node -e '
-  let body = "";
-  process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
-    const [arch] = process.argv.slice(1);
-    const index = JSON.parse(body);
-    const match = (index.manifests ?? []).find(
-      (entry) => entry.platform?.architecture === arch && entry.platform?.os === "linux",
-    );
-    if (match) process.stdout.write(match.digest);
-  });' "${ACTOR_ARCH}")"
+ACTOR_DIGEST="$(image_digest pi-actor local "${ACTOR_ARCH}")" || ACTOR_DIGEST=""
 if [[ -z "${ACTOR_DIGEST}" ]]; then
   echo "no linux/${ACTOR_ARCH} manifest in ${REGISTRY}/pi-actor:local" >&2
   exit 1
@@ -187,7 +165,6 @@ ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 echo "==> building and pushing the gateway image"
 mkdir -p bin
 cp "${KUBECTL_ATE_BIN}" bin/kubectl-ate
-chmod 0755 bin/kubectl-ate
 docker build -t "${GATEWAY_IMAGE}" -f images/gateway/Dockerfile .
 docker push "${GATEWAY_IMAGE}"
 
@@ -199,17 +176,7 @@ fi
 # The worker image tracks the installed substrate. Prefer what an existing
 # pool of this class already runs; fall back to the release image.
 if [[ -z "${WORKER_IMAGE}" ]]; then
-  WORKER_IMAGE="$("${kube[@]}" get workerpools -A -o json 2>/dev/null | node -e '
-    let body = "";
-    process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
-      const [className] = process.argv.slice(1);
-      let items = [];
-      try { items = JSON.parse(body).items ?? []; } catch { return; }
-      const pool = items.find((item) =>
-        (item.spec?.sandboxClasses ?? []).some((entry) => entry.name === className),
-      );
-      process.stdout.write(pool?.spec?.workerImage ?? "");
-    });' "${SANDBOX_CLASS_NAME}" || true)"
+  WORKER_IMAGE="$(worker_image_for "${SANDBOX_CLASS_NAME}")" || WORKER_IMAGE=""
 fi
 if [[ -z "${WORKER_IMAGE}" ]]; then
   WORKER_IMAGE="ghcr.io/agent-substrate/substrate/ateworker-${SANDBOX_CLASS_NAME}:v${SUBSTRATE_VERSION}"
@@ -274,19 +241,10 @@ if ! printf '%s' "${policy}" | grep -q "atespace: ${ATESPACE}\$"; then
 fi
 
 echo "==> creating the actor template (${PI_PROVIDER}/${PI_MODEL})"
-sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
-    -e "s#\${PROVIDER}#${PI_PROVIDER}#" \
-    -e "s#\${MODEL_ID}#${PI_MODEL}#" \
-    -e "s#\${BASE_URL}#${PI_PROVIDER_BASE_URL}#" \
-    -e "s#\${API}#${PI_PROVIDER_API}#" \
-    -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
-    -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
-    -e "s#\${SANDBOX_CLASS_NAME}#${SANDBOX_CLASS_NAME}#" \
-    deploy/test/actor-template.json.tmpl > bin/actor-template.json
+render_actor_template bin/actor-template.json "${ACTOR_IMAGE}"
 # A template is immutable, so a rerun cannot replace it. Creating one is
 # therefore best-effort: an existing template is reused as-is, and the warning
 # says what to do when the image or the provider changed.
-sed -i.bak -e "s#^  name: pi-actor\$#  name: ${ACTOR_TEMPLATE}#" -e "s#^  atespace: pi-agents\$#  atespace: ${ATESPACE}#" bin/actor-template.json && rm -f bin/actor-template.json.bak
 template_error="$("${ate[@]}" create actor-template -f bin/actor-template.json 2>&1)" || {
   if ! printf '%s' "${template_error}" | grep -q "AlreadyExists"; then
     echo "${template_error}" >&2
@@ -370,10 +328,7 @@ GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESP
   < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
 "${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status deploy/pi-gateway --timeout=180s
 
-telegram_status=disabled
-if [[ -n "${TELEGRAM_TOKEN}" ]]; then
-  telegram_status=enabled
-fi
+telegram_status=$([[ -n "${TELEGRAM_TOKEN}" ]] && echo enabled || echo disabled)
 
 cat <<EOF
 

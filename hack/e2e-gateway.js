@@ -2,9 +2,9 @@
 /**
  * Clustered gateway e2e: the HTTP entry point against a real actor.
  *
- * The gateway runs locally against the router port-forward, so the
- * conversation-to-actor mapping, the idle lifecycle, and the metrics are all
- * the deployed code paths.
+ * The gateway runs locally in proxy mode, so the conversation-to-actor
+ * mapping, the idle lifecycle, and the metrics are all the deployed code
+ * paths.
  *
  * A kind WorkerPool is small, so the two conversations are exercised in
  * sequence: the first one finishes and suspends before the second opens. The
@@ -25,7 +25,6 @@ import { join } from "node:path";
 import { actorNameFor, actorState as readActorState, ateClient, createChecks, removeActor, waitFor } from "./e2e-lib.js";
 
 const { atespace, ate } = ateClient();
-const router = process.env.PI_ROUTER_URL ?? "http://127.0.0.1:8000";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 12);
 const port = Number(process.env.PI_HTTP_PORT ?? 8899);
 const actorPrefix = process.env.PI_ACTOR_PREFIX ?? "pi-";
@@ -67,7 +66,6 @@ async function main() {
 			PI_GATEWAY_DATA_DIR: dataDir,
 			PI_HTTP_PORT: String(port),
 			PI_INGRESS_MODE: "proxy",
-			PI_ACTOR_URL: `ws://${new URL(router).host}`,
 			PI_ATESPACE: atespace,
 			PI_ACTOR_TEMPLATE: actorTemplate,
 			PI_IDLE_SECONDS: String(idleSeconds),

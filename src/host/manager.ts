@@ -24,11 +24,10 @@ export interface ManagerOptions {
 	/** TLS settings for the router when actorUrl is wss. */
 	transportTls?: WebSocketTlsOptions;
 	/**
-	 * "router" dials actorUrl and selects the actor with ate-target-actor.
-	 * "proxy" starts one `kubectl-ate proxy actor` per conversation instead,
-	 * which is what a workstation without a router client certificate uses.
+	 * Supplying tunnel options enables proxy mode: one `kubectl-ate proxy
+	 * actor` per conversation, for a workstation without a router client
+	 * certificate.
 	 */
-	ingressMode?: "router" | "proxy";
 	tunnel?: ActorTunnelOptions;
 	actors: ActorProvisioner;
 	metrics?: Metrics;
@@ -70,10 +69,7 @@ export class GatewayManager {
 	constructor(options: ManagerOptions) {
 		this.options = options;
 		this.metrics = options.metrics ?? new Metrics();
-		this.tunnels =
-			options.ingressMode === "proxy"
-				? new ActorTunnels(options.tunnel ?? { binary: "kubectl-ate" })
-				: undefined;
+		this.tunnels = options.tunnel ? new ActorTunnels(options.tunnel) : undefined;
 	}
 
 	getMetrics(): Metrics {

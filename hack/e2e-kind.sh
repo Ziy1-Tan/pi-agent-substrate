@@ -34,6 +34,8 @@ set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
+# shellcheck source=hack/lib.sh
+. "${ROOT}/hack/lib.sh"
 
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
@@ -48,12 +50,7 @@ CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
 PROVIDER="${PROVIDER:-mock}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/test/egress-policy.yaml}"
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-gvisor}"
-if [[ -z "${SANDBOX_CONFIG_NAME:-}" ]]; then
-  case "${SANDBOX_CLASS_NAME}" in
-    gvisor) SANDBOX_CONFIG_NAME=gvisor-default ;;
-    *) SANDBOX_CONFIG_NAME="${SANDBOX_CLASS_NAME}" ;;
-  esac
-fi
+SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLASS_NAME}")}"
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -75,30 +72,13 @@ if [[ "${ONLY}" != "e2e" ]]; then
   docker push "${REGISTRY}/pi-mock-llm:dev"
 
   # A template must pin its image by digest: the server refuses a tag, because
-  # a moved tag would silently invalidate existing snapshots. Read the digest
-  # of this architecture's manifest out of the registry, the same way
-  # hack/deploy-local.sh does.
+  # a moved tag would silently invalidate existing snapshots.
   case "$(uname -m)" in
     x86_64|amd64) ACTOR_ARCH=amd64 ;;
     aarch64|arm64) ACTOR_ARCH=arm64 ;;
     *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
   esac
-  ACTOR_INDEX="$(curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
-    "http://${REGISTRY}/v2/pi-actor/manifests/dev")" || ACTOR_INDEX=""
-  if [[ -z "${ACTOR_INDEX}" ]]; then
-    echo "could not read the image index for ${REGISTRY}/pi-actor:dev" >&2
-    exit 1
-  fi
-  ACTOR_DIGEST="$(printf '%s' "${ACTOR_INDEX}" | node -e '
-    let body = "";
-    process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
-      const [arch] = process.argv.slice(1);
-      const index = JSON.parse(body);
-      const match = (index.manifests ?? []).find(
-        (entry) => entry.platform?.architecture === arch && entry.platform?.os === "linux",
-      );
-      if (match) process.stdout.write(match.digest);
-    });' "${ACTOR_ARCH}")"
+  ACTOR_DIGEST="$(image_digest pi-actor dev "${ACTOR_ARCH}")" || ACTOR_DIGEST=""
   if [[ -z "${ACTOR_DIGEST}" ]]; then
     echo "no linux/${ACTOR_ARCH} manifest in ${REGISTRY}/pi-actor:dev" >&2
     exit 1
@@ -106,22 +86,9 @@ if [[ "${ONLY}" != "e2e" ]]; then
 
   ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
   MOCK_LLM_IMAGE="${REGISTRY}/pi-mock-llm:dev"
-  # The worker image is the ateom binary matching the sandbox class, not the
-  # atelet daemon. Reuse what an existing gVisor pool already runs, so this
-  # script tracks the installed version instead of hard-coding a digest.
-  WORKER_IMAGE="${WORKER_IMAGE:-}"
-  if [[ -z "${WORKER_IMAGE}" ]]; then
-    WORKER_IMAGE="$("${kube[@]}" get workerpools -A -o json 2>/dev/null | node -e '
-      let body = "";
-      process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
-        const [className] = process.argv.slice(1);
-        const pools = JSON.parse(body).items ?? [];
-        const pool = pools.find((entry) =>
-          (entry.spec?.sandboxClasses ?? []).some((sandbox) => sandbox.name === className),
-        );
-        process.stdout.write(pool?.spec?.workerImage ?? "");
-      });' "${SANDBOX_CLASS_NAME}")"
-  fi
+  # The worker image matches the sandbox class. Reuse what an existing pool
+  # already runs, so this script tracks the installed version.
+  WORKER_IMAGE="${WORKER_IMAGE:-$(worker_image_for "${SANDBOX_CLASS_NAME}")}"
   if [[ -z "${WORKER_IMAGE}" ]]; then
     echo "no existing ${SANDBOX_CLASS_NAME} WorkerPool to copy workerImage from; set WORKER_IMAGE" >&2
     exit 1
@@ -151,18 +118,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
     [[ -n "${PI_PROVIDER_BASE_URL:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_PROVIDER_BASE_URL" >&2; exit 1; }
     [[ -n "${PI_PROVIDER_API:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_PROVIDER_API" >&2; exit 1; }
   fi
-  sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
-      -e "s#\${PROVIDER}#${PI_PROVIDER}#" \
-      -e "s#\${MODEL_ID}#${PI_MODEL}#" \
-      -e "s#\${BASE_URL}#${PI_PROVIDER_BASE_URL}#" \
-      -e "s#\${API}#${PI_PROVIDER_API}#" \
-      -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
-      -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
-      -e "s#\${SANDBOX_CLASS_NAME}#${SANDBOX_CLASS_NAME}#" \
-      deploy/test/actor-template.json.tmpl > bin/actor-template.json
-  # The manifest is YAML-shaped, so rename through it before applying it.
-  sed -i.bak -e "s#^  name: pi-actor\$#  name: ${ACTOR_TEMPLATE}#" -e "s#^  atespace: pi-agents\$#  atespace: ${ATESPACE}#" \
-    bin/actor-template.json && rm -f bin/actor-template.json.bak
+  render_actor_template bin/actor-template.json "${ACTOR_IMAGE}"
 
   # A template is immutable and the server refuses a create when one already
   # exists, so a rerun against the same cluster would fail. Every run builds a
@@ -239,7 +195,7 @@ if [[ "${ONLY}" != "deploy" ]]; then
     node hack/e2e-actor.js
 
   echo "==> running the HTTP channel e2e"
-  PI_ATESPACE="${ATESPACE}" PI_ROUTER_URL="${ROUTER_URL}" \
+  PI_ATESPACE="${ATESPACE}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     PI_ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
     PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_HTTP_PORT="${HTTP_PORT}" \

@@ -57,6 +57,15 @@ const routerTls = {
 	cert: process.env.PI_ROUTER_CERT,
 	key: process.env.PI_ROUTER_KEY,
 };
+const tunnel =
+	ingressMode === "proxy"
+		? {
+				binary: process.env.KUBECTL_ATE ?? "kubectl-ate",
+				context: process.env.KUBE_CONTEXT,
+				remotePort: Number(process.env.PI_ACTOR_PORT ?? 80),
+				log: (message: string) => console.error(`[substrate] ${message}`),
+			}
+		: undefined;
 
 const control = new KubectlAteControl({
 	binary: process.env.KUBECTL_ATE,
@@ -77,17 +86,8 @@ const actors = new ActorProvisioner({
 const manager = new GatewayManager({
 	dataDir: process.env.PI_GATEWAY_DATA_DIR ?? "/tmp/pi-gateway",
 	actorUrl: process.env.PI_ACTOR_URL ?? "ws://127.0.0.1:8000",
-	transportTls: Object.values(routerTls).some(Boolean) ? routerTls : undefined,
-	ingressMode,
-	tunnel:
-		ingressMode === "proxy"
-			? {
-					binary: process.env.KUBECTL_ATE ?? "kubectl-ate",
-					context: process.env.KUBE_CONTEXT,
-					remotePort: Number(process.env.PI_ACTOR_PORT ?? 80),
-					log: (message) => console.error(`[substrate] ${message}`),
-				}
-			: undefined,
+	transportTls: routerTls.ca || routerTls.cert || routerTls.key ? routerTls : undefined,
+	tunnel,
 	actors,
 	// Telegram chats reply in place; every other conversation answers through
 	// POST /messages, which reads the conversation's turn recorder.

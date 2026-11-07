@@ -9,12 +9,18 @@ const CONNECT_TIMEOUT_MS = 10_000;
 const STALE_AFTER_MS = 5_000;
 
 export interface WebSocketTlsOptions {
-	/** CA bundle used to verify the router's serving certificate. */
-	ca?: string | Buffer;
-	/** Client certificate chain for the router's ingress allowlist. */
-	cert?: string | Buffer;
-	/** Private key for `cert`. A combined PEM may be passed for both. */
-	key?: string | Buffer;
+	/** Path to the CA bundle that verifies the router's serving certificate. */
+	ca?: string;
+	/** Path to the client certificate chain for the router's ingress allowlist. */
+	cert?: string;
+	/** Path to the private key. It may name the same combined bundle as `cert`. */
+	key?: string;
+}
+
+interface ResolvedTls {
+	ca?: string;
+	cert?: string;
+	key?: string;
 }
 
 export interface WebSocketTransportOptions {
@@ -160,43 +166,31 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 function openSocket(options: WebSocketTransportOptions): Promise<WebSocket> {
 	return new Promise((resolve, reject) => {
-		// The protected volume is read on every connect: podCertificate
-		// credentials rotate, so holding the bytes from startup would present an
-		// expired certificate after the first rotation.
 		const socket = new WebSocket(options.url, {
 			headers: options.targetActor ? { "ate-target-actor": options.targetActor } : {},
-			...loadTls(options.tls),
+			...(options.url.startsWith("wss:") ? loadTls(options.tls) : undefined),
 		});
 		socket.once("open", () => resolve(socket));
 		socket.once("error", (error) => reject(error instanceof Error ? error : new Error(String(error))));
 	});
 }
 
+const CERTIFICATE_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+
 /**
- * The router's credential bundle is one PEM holding the private key and the
- * certificate chain, key first. Node rejects that file as `cert` ("no start
- * line") and only accepts a certificate-only PEM, so the blocks are split.
+ * The router's credential bundle stores the private key before the
+ * certificate chain. Node rejects that file as `cert` ("no start line"), so
+ * the chain is extracted. The files are read per connect because podCertificate
+ * credentials rotate.
  */
-function loadTls(tls: WebSocketTlsOptions | undefined): WebSocketTlsOptions | undefined {
+function loadTls(tls: WebSocketTlsOptions | undefined): ResolvedTls | undefined {
 	if (!tls) return undefined;
-	const ca = readPem(tls.ca);
-	const bundle = readPem(tls.cert);
-	const key = readPem(tls.key);
+	const bundle = tls.cert ? readFileSync(tls.cert, "utf8") : undefined;
+	const key = tls.key && tls.key !== tls.cert ? readFileSync(tls.key, "utf8") : bundle;
 	return {
-		ca,
-		cert: bundle === undefined ? undefined : pemBlocks(bundle, "CERTIFICATE"),
-		key: key === undefined ? undefined : pemBlocks(key, "PRIVATE KEY") ?? key,
+		ca: tls.ca ? readFileSync(tls.ca, "utf8") : undefined,
+		cert: bundle?.match(CERTIFICATE_BLOCK)?.join("\n"),
+		key: key?.match(PRIVATE_KEY_BLOCK)?.[0] ?? key,
 	};
-}
-
-function readPem(value: string | Buffer | undefined): string | undefined {
-	if (value === undefined) return undefined;
-	const text = Buffer.isBuffer(value) ? value.toString("utf8") : value;
-	return text.includes("-----BEGIN ") ? text : readFileSync(text, "utf8");
-}
-
-function pemBlocks(pem: string, type: "CERTIFICATE" | "PRIVATE KEY"): string | undefined {
-	const label = type === "PRIVATE KEY" ? "[A-Z ]*PRIVATE KEY" : "CERTIFICATE";
-	const blocks = pem.match(new RegExp(`-----BEGIN ${label}-----[\\s\\S]*?-----END ${label}-----`, "g"));
-	return blocks?.join("\n");
 }

@@ -1,24 +1,28 @@
-# ActorTemplate for local and clustered deployments, in ateapipb protojson form.
+# ActorTemplate for local and clustered deployments, in ateapi protojson form.
 #
-# The template is immutable. Changing the image, env, or resources means
-# creating a new template (and a new actor that uses it).
+# The template is immutable. Changing the image, env, resources, or the
+# sandbox-class selector means creating a new template (and a new actor that
+# uses it).
 #
 # ${...} placeholders are filled by hack/e2e-kind.sh or hack/deploy-local.sh:
-#   ACTOR_IMAGE     digest-pinned actor image in the local registry
-#   PROVIDER        provider id
-#   MODEL_ID        model id
-#   BASE_URL        provider endpoint
-#   API             wire protocol, e.g. openai-completions
-#   CONTEXT_WINDOW  model context window
-#   MAX_TOKENS      model output limit
-#   SANDBOX_CLASS   SANDBOX_CLASS_GVISOR or SANDBOX_CLASS_MICROVM
-#   SANDBOX_CONFIG  cluster SandboxConfig name, e.g. gvisor-default or microvm
+#   ACTOR_IMAGE        digest-pinned actor image in the local registry
+#   PROVIDER           provider id
+#   MODEL_ID           model id
+#   BASE_URL           provider endpoint
+#   API                wire protocol, e.g. openai-completions
+#   CONTEXT_WINDOW     model context window
+#   MAX_TOKENS         model output limit
+#   SANDBOX_CLASS_NAME microvm or gvisor, matching the WorkerPool label
 metadata:
   atespace: pi-agents
   name: pi-actor
+# v1.0.0 selects the sandbox class through the WorkerPool, not through a
+# template field. Match the label the pool carries so a cluster with both
+# classes places the actor deterministically.
 workerSelector:
   matchLabels:
     workload: pi
+    sandboxClass: '${SANDBOX_CLASS_NAME}'
 containers:
 - name: bridge
   image: ${ACTOR_IMAGE}
@@ -59,27 +63,26 @@ containers:
   # as it binds the port, roughly 500ms after start, and snapshotting a Node
   # process at that moment produces a restore whose bridge never listens again
   # -- the resume then times out on the same probe and the actor is CRASHED.
-  # Without a probe the controller waits its 20s warmup, which was measured to
-  # be enough.
+  # Without a probe the controller waits its 20s warmup. v1.0.0 still supports
+  # that fallback. Switch to a probe only after /healthz answers 503 until the
+  # process is old enough for the snapshot to be safe.
   volumeMounts:
   - name: workspace
     mountPath: /workspace
   - name: system-info
     mountPath: /run/ate
+# v1.0.0 sizes the actor in integer units, not Kubernetes quantities.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 1Gi
-sandboxConfig:
-  sandboxClass: ${SANDBOX_CLASS}
-  configName: ${SANDBOX_CONFIG}
+    cpuMillicores: 1000
+    memoryBytes: 1073741824
 snapshotConfig:
   # MEMORY keeps the Pi process warm across suspend, which is the point of the
   # always-on path: a resume replays no cold boot.
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://ate-snapshots/pi-agents/
+  # No storageLocation. v1.0.0 stores snapshots under ate-api-server's
+  # --snapshot-location unless the PerTemplateSnapshotLocation preview gate is
+  # enabled and the client opts in with --preview.
 volumes:
 - name: workspace
   durableDir: {}

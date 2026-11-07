@@ -9,6 +9,7 @@
 		"node": ">=22"
 	},
 	"piVersion": "0.84.2",
+	"substrateVersion": "1.0.0",
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",

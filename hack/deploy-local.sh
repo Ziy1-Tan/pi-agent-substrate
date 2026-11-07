@@ -2,22 +2,27 @@
 #
 # Local, single-user deployment: kind cluster, real model provider, Telegram.
 #
-# This is the path for "my own machine, my own bot". It does not deploy a
-# gateway into the cluster: the gateway runs on the workstation and talks to
-# the router through a port-forward, which is the same code path the tests use
-# and keeps the bot token out of Kubernetes.
+# This is the path for "my own machine, my own bot". It deploys the gateway
+# into the cluster: the gateway reaches atenet-router over HTTPS with its
+# projected podidentity certificate, keeps its conversation log on a PVC, and
+# reads the bot token from a Secret. The actor never sees either.
 #
 # Assumes:
-#   - kind cluster with Agent Substrate installed, and a WorkerPool in ATESPACE
-#     whose sandboxClasses match SANDBOX_CLASS
+#   - kind cluster with Agent Substrate v1.0.0 installed
 #   - local registry on localhost:5001
-#   - kubectl-ate on PATH (or KUBECTL_ATE set)
+#   - kubectl-ate v1.0.0 on PATH (or KUBECTL_ATE set)
 #
 # Env:
 #   KUBE_CONTEXT      kubectl context (default: kind-kind)
 #   KUBECTL_ATE       kubectl-ate binary (default: kubectl-ate)
-#   ATESPACE          atespace (default: pi-agents)
-#   ACTOR_TEMPLATE    template name (default: pi-local)
+#   KUBECTL_ATE_BIN   local binary copied into the gateway image
+#                     (default: KUBECTL_ATE resolved on PATH)
+#   SUBSTRATE_VERSION substrate release the cluster and CLI run (default:
+#                     package.json substrateVersion)
+#   ATESPACE          atespace (default: pi-agents); created if absent
+#   ACTOR_TEMPLATE    template name (default: pi-local-v1-0-0; names may not
+#                     contain dots)
+#   WORKERPOOL_NAME   WorkerPool name (default: pi-workerpool-<class>)
 #   CONVERSATION      conversation to pre-create an actor for (default: local/chat)
 #   ACTOR             actor name (default: derived from CONVERSATION, matching
 #                     the gateway's mapping: local/chat -> pi-local-chat)
@@ -36,10 +41,16 @@
 #   PROVIDER_HOST     host named in the egress policy (default: parsed from the
 #                     provider's baseUrl)
 #   SECRET_NAME       Kubernetes Secret holding the API key (default: pi-provider)
-#   SANDBOX_CLASS     SANDBOX_CLASS_MICROVM (default) or SANDBOX_CLASS_GVISOR
-#   SANDBOX_CONFIG    SandboxConfig name (default: microvm)
+#   SANDBOX_CLASS_NAME  microvm (default) or gvisor
+#   SANDBOX_CONFIG_NAME SandboxConfig name (default: microvm or gvisor-default)
+#   WORKER_IMAGE      worker image (default: the cluster's existing pool for
+#                     this class, then the release image for SUBSTRATE_VERSION)
 #   IDLE_SECONDS      idle window before suspend (default: 60)
+#   TELEGRAM_TOKEN    bot token; empty disables the Telegram entry point
 #   TELEGRAM_CHATS    comma-separated chat ids to answer (empty: any chat)
+#   GATEWAY_NAMESPACE namespace for the gateway (default: pi-gateway)
+#   SUBSTRATE_NAMESPACE system namespace (default: ate-system)
+#   REGISTRY          image registry (default: localhost:5001)
 #
 # The API key never enters the actor. The template carries a placeholder, and
 # the egress gateway replaces the auth header on the way out.
@@ -48,10 +59,11 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
 
+SUBSTRATE_VERSION="${SUBSTRATE_VERSION:-$(node -p "require('./package.json').substrateVersion")}"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
 ATESPACE="${ATESPACE:-pi-agents}"
-ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-local}"
+ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-local-v1-0-0}"
 CONVERSATION="${CONVERSATION:-local/chat}"
 # The gateway derives an actor name from the conversation id; creating an actor
 # under any other name would leave it unused and make the gateway create its own.
@@ -61,11 +73,22 @@ ACTOR="${ACTOR:-pi-${CONVERSATION_SLUG:-conversation}}"
 PROVIDER_ENV="${PROVIDER_ENV:-deploy/local/provider.env}"
 EGRESS_POLICY="${EGRESS_POLICY:-deploy/local/egress-policy.yaml.tmpl}"
 SECRET_NAME="${SECRET_NAME:-pi-provider}"
-SANDBOX_CLASS="${SANDBOX_CLASS:-SANDBOX_CLASS_MICROVM}"
-SANDBOX_CONFIG="${SANDBOX_CONFIG:-microvm}"
+SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-microvm}"
+if [[ -z "${SANDBOX_CONFIG_NAME:-}" ]]; then
+  case "${SANDBOX_CLASS_NAME}" in
+    gvisor) SANDBOX_CONFIG_NAME=gvisor-default ;;
+    *) SANDBOX_CONFIG_NAME="${SANDBOX_CLASS_NAME}" ;;
+  esac
+fi
+WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool-${SANDBOX_CLASS_NAME}}"
+WORKER_IMAGE="${WORKER_IMAGE:-}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
-TELEGRAM_CHATS="${TELEGRAM_CHATS:-}"
+TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-${PI_TELEGRAM_TOKEN:-}}"
+TELEGRAM_CHATS="${TELEGRAM_CHATS:-${PI_TELEGRAM_CHATS:-}}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-pi-gateway}"
+SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE:-ate-system}"
 REGISTRY="${REGISTRY:-localhost:5001}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-${REGISTRY}/pi-gateway:local}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
 ate=("${KUBECTL_ATE}" --context "${KUBE_CONTEXT}")
@@ -73,7 +96,20 @@ ate=("${KUBECTL_ATE}" --context "${KUBE_CONTEXT}")
 need() { command -v "$1" >/dev/null || { echo "missing $1" >&2; exit 1; }; }
 need docker
 need node
+need envsubst
 need "${KUBECTL_ATE}"
+
+KUBECTL_ATE_BIN="${KUBECTL_ATE_BIN:-$(command -v "${KUBECTL_ATE}" || true)}"
+if [[ -z "${KUBECTL_ATE_BIN}" ]]; then
+  echo "KUBECTL_ATE_BIN is empty and ${KUBECTL_ATE} is not on PATH" >&2
+  exit 1
+fi
+ate_version="$("${KUBECTL_ATE}" --version 2>&1 || true)"
+if [[ "${ate_version}" != *"v${SUBSTRATE_VERSION}"* && "${ate_version}" != *"(devel)"* ]]; then
+  echo "kubectl-ate is not v${SUBSTRATE_VERSION}: ${ate_version}" >&2
+  echo "install the release binary, or set KUBECTL_ATE/KUBECTL_ATE_BIN" >&2
+  exit 1
+fi
 
 # provider.env is the source of truth when it exists; exporting the same
 # values in the shell is optional.
@@ -96,10 +132,10 @@ require "${PI_PROVIDER_BASE_URL:-}" PI_PROVIDER_BASE_URL
 require "${PI_PROVIDER_API:-}" PI_PROVIDER_API
 require "${PI_PROVIDER_API_KEY:-}" PI_PROVIDER_API_KEY
 
-if [[ "${SANDBOX_CLASS}" == "SANDBOX_CLASS_MICROVM" ]]; then
+if [[ "${SANDBOX_CLASS_NAME}" == "microvm" ]]; then
   kvm_total="$("${kube[@]}" get nodes -o jsonpath='{range .items[*]}{.status.allocatable.ate\.dev/kvm}{"\n"}{end}' | awk '{total += $1} END {print total + 0}')"
   if [[ "${kvm_total}" == "0" ]]; then
-    echo "no node advertises ate.dev/kvm; ${SANDBOX_CLASS} needs nested virtualization" >&2
+    echo "no node advertises ate.dev/kvm; ${SANDBOX_CLASS_NAME} needs nested virtualization" >&2
     exit 1
   fi
 fi
@@ -148,6 +184,45 @@ if [[ -z "${ACTOR_DIGEST}" ]]; then
 fi
 ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 
+echo "==> building and pushing the gateway image"
+mkdir -p bin
+cp "${KUBECTL_ATE_BIN}" bin/kubectl-ate
+chmod 0755 bin/kubectl-ate
+docker build -t "${GATEWAY_IMAGE}" -f images/gateway/Dockerfile .
+docker push "${GATEWAY_IMAGE}"
+
+echo "==> ensuring atespace ${ATESPACE}"
+if ! "${ate[@]}" get atespace "${ATESPACE}" >/dev/null 2>&1; then
+  "${ate[@]}" create atespace "${ATESPACE}"
+fi
+
+# The worker image tracks the installed substrate. Prefer what an existing
+# pool of this class already runs; fall back to the release image.
+if [[ -z "${WORKER_IMAGE}" ]]; then
+  WORKER_IMAGE="$("${kube[@]}" get workerpools -A -o json 2>/dev/null | node -e '
+    let body = "";
+    process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => {
+      const [className] = process.argv.slice(1);
+      let items = [];
+      try { items = JSON.parse(body).items ?? []; } catch { return; }
+      const pool = items.find((item) =>
+        (item.spec?.sandboxClasses ?? []).some((entry) => entry.name === className),
+      );
+      process.stdout.write(pool?.spec?.workerImage ?? "");
+    });' "${SANDBOX_CLASS_NAME}" || true)"
+fi
+if [[ -z "${WORKER_IMAGE}" ]]; then
+  WORKER_IMAGE="ghcr.io/agent-substrate/substrate/ateworker-${SANDBOX_CLASS_NAME}:v${SUBSTRATE_VERSION}"
+fi
+
+echo "==> applying worker pool ${WORKERPOOL_NAME} (${SANDBOX_CLASS_NAME})"
+ATESPACE="${ATESPACE}" WORKERPOOL_NAME="${WORKERPOOL_NAME}" \
+  SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME}" \
+  WORKER_IMAGE="${WORKER_IMAGE}" \
+  envsubst '${ATESPACE} ${WORKERPOOL_NAME} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME} ${WORKER_IMAGE}' \
+  < deploy/local/workerpool.yaml.tmpl | "${kube[@]}" apply -f -
+"${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=300s
+
 # `read` needs a terminating newline: without one it returns non-zero and
 # errexit would end the script here.
 read -r inferred_host inferred_port < <(node -e '
@@ -174,7 +249,7 @@ echo "==> creating the provider secret"
 # The credential provider is default-deny: without this the gateway cannot
 # resolve the Secret and every matching request fails closed with 403.
 echo "==> granting atespace ${ATESPACE} access to namespace ${ATESPACE}"
-policy="$("${kube[@]}" -n ate-system get configmap k8s-credential-provider-namespace-policy -o jsonpath='{.data.namespace-policy\.yaml}')"
+policy="$("${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get configmap k8s-credential-provider-namespace-policy -o jsonpath='{.data.namespace-policy\.yaml}')"
 if ! printf '%s' "${policy}" | grep -q "atespace: ${ATESPACE}\$"; then
   # The shipped default grants nothing, written as `policies: []`. Appending a
   # list item to that inline empty list would be invalid YAML, so the whole
@@ -189,13 +264,13 @@ if ! printf '%s' "${policy}" | grep -q "atespace: ${ATESPACE}\$"; then
     printf '%s\n' "${existing}" | sed '/^[[:space:]]*$/d'
     printf '%s\n' "- atespace: ${ATESPACE}" "  allowedNamespaces:" "  - ${ATESPACE}"
   } > /tmp/pi-namespace-policy.yaml
-  "${kube[@]}" -n ate-system create configmap k8s-credential-provider-namespace-policy \
+  "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" create configmap k8s-credential-provider-namespace-policy \
     --from-file=namespace-policy.yaml=/tmp/pi-namespace-policy.yaml \
     --dry-run=client -o yaml | "${kube[@]}" apply -f -
   # The provider reads the policy once at startup; editing the ConfigMap alone
   # changes nothing until it restarts.
-  "${kube[@]}" -n ate-system rollout restart deployment/k8s-credential-provider
-  "${kube[@]}" -n ate-system rollout status deployment/k8s-credential-provider --timeout=120s
+  "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" rollout restart deployment/k8s-credential-provider
+  "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" rollout status deployment/k8s-credential-provider --timeout=120s
 fi
 
 echo "==> creating the actor template (${PI_PROVIDER}/${PI_MODEL})"
@@ -206,8 +281,7 @@ sed -e "s#\${ACTOR_IMAGE}#${ACTOR_IMAGE}#" \
     -e "s#\${API}#${PI_PROVIDER_API}#" \
     -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
     -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
-    -e "s#\${SANDBOX_CLASS}#${SANDBOX_CLASS}#" \
-    -e "s#\${SANDBOX_CONFIG}#${SANDBOX_CONFIG}#" \
+    -e "s#\${SANDBOX_CLASS_NAME}#${SANDBOX_CLASS_NAME}#" \
     deploy/test/actor-template.json.tmpl > bin/actor-template.json
 # A template is immutable, so a rerun cannot replace it. Creating one is
 # therefore best-effort: an existing template is reused as-is, and the warning
@@ -272,20 +346,47 @@ else
   "${ate[@]}" create egress-policy "${ACTOR}" -a "${ATESPACE}" -f "${RENDERED_POLICY}"
 fi
 
+gateway_spiffe="spiffe://cluster.local/ns/${GATEWAY_NAMESPACE}/sa/pi-gateway"
+if ! "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get deploy atenet-router -o yaml 2>/dev/null | grep -q "${gateway_spiffe}"; then
+  echo "atenet-router does not allow ${gateway_spiffe}" >&2
+  echo "reinstall substrate with --ingress-allowed-spiffe-ids=${gateway_spiffe}" >&2
+  exit 1
+fi
+
+echo "==> creating the gateway namespace and inputs"
+"${kube[@]}" create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | "${kube[@]}" apply -f -
+"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create secret generic pi-telegram \
+  --from-literal=token="${TELEGRAM_TOKEN}" \
+  --dry-run=client -o yaml | "${kube[@]}" apply -f -
+"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap pi-gateway-egress \
+  --from-file=egress-policy.yaml="${RENDERED_POLICY}" \
+  --dry-run=client -o yaml | "${kube[@]}" apply -f -
+
+echo "==> applying the gateway"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
+  GATEWAY_IMAGE="${GATEWAY_IMAGE}" ATESPACE="${ATESPACE}" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
+  IDLE_SECONDS="${IDLE_SECONDS}" TELEGRAM_CHATS="${TELEGRAM_CHATS}" \
+  envsubst '${GATEWAY_NAMESPACE} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS} ${TELEGRAM_CHATS}' \
+  < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
+"${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status deploy/pi-gateway --timeout=180s
+
+telegram_status=disabled
+if [[ -n "${TELEGRAM_TOKEN}" ]]; then
+  telegram_status=enabled
+fi
+
 cat <<EOF
 
 ==> ready
 
-Start the gateway on this machine:
+Reach the gateway API from this machine:
 
-  kubectl -n ate-system port-forward svc/atenet-router 8000:80 &
-  KUBECTL_ATE=${KUBECTL_ATE} KUBE_CONTEXT=${KUBE_CONTEXT} \\
-  PI_ACTOR_URL=ws://127.0.0.1:8000 PI_ACTOR_TEMPLATE=${ACTOR_TEMPLATE} \\
-  PI_EGRESS_POLICY=${RENDERED_POLICY} PI_IDLE_SECONDS=${IDLE_SECONDS} \\
-  PI_TELEGRAM_TOKEN=<your bot token> \\
-  PI_TELEGRAM_CHATS=${TELEGRAM_CHATS:-<your chat id>} \\
-    node dist/src/host/main.js
+  kubectl --context ${KUBE_CONTEXT} -n ${GATEWAY_NAMESPACE} port-forward svc/pi-gateway 8788:8788 &
+  curl -s -X POST http://127.0.0.1:8788/messages \\
+    -H 'content-type: application/json' \\
+    -d '{"conversation":"${CONVERSATION}","text":"hello"}'
 
-Then send the bot a message. It creates the conversation on first use, and the
-idle lifecycle suspends the actor ${IDLE_SECONDS}s after the last turn.
+The gateway reaches actors through atenet-router over wss, creates the actor
+on first use, and suspends it ${IDLE_SECONDS}s after the last turn. Telegram is
+${telegram_status}; chats: ${TELEGRAM_CHATS:-any}.
 EOF

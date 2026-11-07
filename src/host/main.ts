@@ -17,6 +17,12 @@
  *   PI_HTTP_HOST           listen address (default 127.0.0.1)
  *   PI_GATEWAY_DATA_DIR    conversation storage root (default `/tmp/pi-gateway`)
  *   PI_ACTOR_URL           bridge WebSocket, usually the router's port-forward
+ *   PI_INGRESS_MODE        router (default) or proxy; proxy starts
+ *                          `kubectl-ate proxy actor` per conversation
+ *   PI_ACTOR_PORT          actor port for proxy mode (default 80)
+ *   PI_ROUTER_CA           CA bundle for a wss router (in-cluster gateway)
+ *   PI_ROUTER_CERT         client certificate chain for the router
+ *   PI_ROUTER_KEY          private key for PI_ROUTER_CERT
  *   PI_ACTOR_TEMPLATE      template used to create a missing actor
  *   PI_EGRESS_POLICY       manifest applied to each new actor (default
  *                          `deploy/test/egress-policy.yaml`; empty disables it)
@@ -25,6 +31,8 @@
  *   PI_TELEGRAM_CHATS      comma-separated chat ids to answer (default: any)
  *   PI_TELEGRAM_API        Bot API base (default https://api.telegram.org)
  *   KUBECTL_ATE            kubectl-ate binary (default on PATH)
+ *   PI_KUBECTL_ATE_TOKEN_FILE  bearer token for ate-api; an in-cluster pod
+ *                          points this at its own ServiceAccount token
  *   KUBE_CONTEXT           kubectl context
  */
 import { GatewayManager, type ConversationSpec } from "./manager.js";
@@ -34,6 +42,7 @@ import { TelegramPoll } from "./channel/telegram-poll.js";
 import { KubectlAteControl } from "./substrate/kubectl.js";
 import { ActorProvisioner } from "./substrate/provisioner.js";
 
+const ingressMode = process.env.PI_INGRESS_MODE === "proxy" ? "proxy" : "router";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 60);
 const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/test/egress-policy.yaml";
 const telegramToken = process.env.PI_TELEGRAM_TOKEN;
@@ -43,10 +52,17 @@ const telegramChats = (process.env.PI_TELEGRAM_CHATS ?? "")
 	.map((value) => value.trim())
 	.filter(Boolean);
 
+const routerTls = {
+	ca: process.env.PI_ROUTER_CA,
+	cert: process.env.PI_ROUTER_CERT,
+	key: process.env.PI_ROUTER_KEY,
+};
+
 const control = new KubectlAteControl({
 	binary: process.env.KUBECTL_ATE,
 	context: process.env.KUBE_CONTEXT,
 	template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
+	tokenFile: process.env.PI_KUBECTL_ATE_TOKEN_FILE,
 	log: (message) => console.error(`[substrate] ${message}`),
 });
 
@@ -61,6 +77,17 @@ const actors = new ActorProvisioner({
 const manager = new GatewayManager({
 	dataDir: process.env.PI_GATEWAY_DATA_DIR ?? "/tmp/pi-gateway",
 	actorUrl: process.env.PI_ACTOR_URL ?? "ws://127.0.0.1:8000",
+	transportTls: Object.values(routerTls).some(Boolean) ? routerTls : undefined,
+	ingressMode,
+	tunnel:
+		ingressMode === "proxy"
+			? {
+					binary: process.env.KUBECTL_ATE ?? "kubectl-ate",
+					context: process.env.KUBE_CONTEXT,
+					remotePort: Number(process.env.PI_ACTOR_PORT ?? 80),
+					log: (message) => console.error(`[substrate] ${message}`),
+				}
+			: undefined,
 	actors,
 	// Telegram chats reply in place; every other conversation answers through
 	// POST /messages, which reads the conversation's turn recorder.

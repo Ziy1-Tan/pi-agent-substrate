@@ -1,0 +1,184 @@
+# In-cluster Pi gateway.
+#
+# The gateway keeps the channel connections and the conversation log, and
+# walks actors through their idle lifecycle. It reaches atenet-router over
+# HTTPS with a projected podidentity client certificate; the router must list
+# this ServiceAccount's SPIFFE ID in --ingress-allowed-spiffe-ids.
+#
+# It uses kubectl-ate for the control plane. The SA may mint a token for the
+# shared ate-client ServiceAccount, which the development install makes the
+# bootstrap owner. A production install should grant a narrower role instead.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${GATEWAY_NAMESPACE}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pi-gateway
+  namespace: ${GATEWAY_NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pi-gateway-control
+  namespace: ${SUBSTRATE_NAMESPACE}
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/portforward"]
+  verbs: ["create", "get"]
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  resourceNames: ["ate-client"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pi-gateway-control
+  namespace: ${SUBSTRATE_NAMESPACE}
+subjects:
+- kind: ServiceAccount
+  name: pi-gateway
+  namespace: ${GATEWAY_NAMESPACE}
+roleRef:
+  kind: Role
+  name: pi-gateway-control
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pi-gateway-trust
+rules:
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["clustertrustbundles"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pi-gateway-trust
+subjects:
+- kind: ServiceAccount
+  name: pi-gateway
+  namespace: ${GATEWAY_NAMESPACE}
+roleRef:
+  kind: ClusterRole
+  name: pi-gateway-trust
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pi-gateway-data
+  namespace: ${GATEWAY_NAMESPACE}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pi-gateway
+  namespace: ${GATEWAY_NAMESPACE}
+spec:
+  selector:
+    app: pi-gateway
+  ports:
+  - name: http
+    port: 8788
+    targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pi-gateway
+  namespace: ${GATEWAY_NAMESPACE}
+  labels:
+    app: pi-gateway
+spec:
+  replicas: 1
+  # One conversation store, one Telegram long-poll. Recreate keeps the RWO
+  # volume and the poller from overlapping during a rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pi-gateway
+  template:
+    metadata:
+      labels:
+        app: pi-gateway
+    spec:
+      serviceAccountName: pi-gateway
+      containers:
+      - name: gateway
+        image: ${GATEWAY_IMAGE}
+        # The tag is reused across rebuilds; always pull so a rollout cannot
+        # keep running the previous binary from the node's image cache.
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8788
+        env:
+        - name: PI_ACTOR_URL
+          value: wss://atenet-router.${SUBSTRATE_NAMESPACE}.svc:443
+        - name: PI_ROUTER_CA
+          value: /run/pi-router/router-ca.pem
+        - name: PI_ROUTER_CERT
+          value: /run/pi-router/credential-bundle.pem
+        - name: PI_ROUTER_KEY
+          value: /run/pi-router/credential-bundle.pem
+        - name: PI_GATEWAY_DATA_DIR
+          value: /data
+        - name: PI_HTTP_HOST
+          value: 0.0.0.0
+        - name: PI_ATESPACE
+          value: ${ATESPACE}
+        - name: PI_ACTOR_TEMPLATE
+          value: ${ACTOR_TEMPLATE}
+        - name: PI_EGRESS_POLICY
+          value: /etc/pi/egress-policy.yaml
+        - name: PI_IDLE_SECONDS
+          value: "${IDLE_SECONDS}"
+        - name: PI_TELEGRAM_CHATS
+          value: "${TELEGRAM_CHATS}"
+        - name: PI_TELEGRAM_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: pi-telegram
+              key: token
+        volumeMounts:
+        - name: router-client
+          mountPath: /run/pi-router
+        - name: data
+          mountPath: /data
+        - name: egress
+          mountPath: /etc/pi
+      volumes:
+      - name: router-client
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: router-ca.pem
+      - name: data
+        persistentVolumeClaim:
+          claimName: pi-gateway-data
+      - name: egress
+        configMap:
+          name: pi-gateway-egress

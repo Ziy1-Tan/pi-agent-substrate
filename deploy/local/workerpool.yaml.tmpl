@@ -1,0 +1,34 @@
+# WorkerPool for a local deployment.
+#
+# The worker image is the ateworker-<class> build that matches the installed
+# substrate. Render with ATESPACE, SANDBOX_CLASS_NAME, SANDBOX_CONFIG_NAME, and
+# WORKER_IMAGE set. A microVM pool only schedules on a node that advertises
+# ate.dev/kvm.
+#
+# ActorTemplate.workerSelector matches the sandboxClass label, so a pool of
+# this class is chosen even when the cluster runs both classes.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: ${WORKERPOOL_NAME}
+  namespace: ${ATESPACE}
+  labels:
+    workload: pi
+    sandboxClass: ${SANDBOX_CLASS_NAME}
+spec:
+  replicas: 1
+  sandboxClasses:
+  - name: ${SANDBOX_CLASS_NAME}
+    configRef:
+      name: ${SANDBOX_CONFIG_NAME}
+  template:
+    resources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  workerImage: ${WORKER_IMAGE}

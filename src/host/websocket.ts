@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import WebSocket from "ws";
 
 import type { ActorTransport } from "./backend.js";
@@ -7,10 +8,21 @@ const CONNECT_TIMEOUT_MS = 10_000;
 /** No traffic for this long means the connection may outlive its actor. */
 const STALE_AFTER_MS = 5_000;
 
+export interface WebSocketTlsOptions {
+	/** CA bundle used to verify the router's serving certificate. */
+	ca?: string | Buffer;
+	/** Client certificate chain for the router's ingress allowlist. */
+	cert?: string | Buffer;
+	/** Private key for `cert`. A combined PEM may be passed for both. */
+	key?: string | Buffer;
+}
+
 export interface WebSocketTransportOptions {
 	url: string;
 	/** Sent on the upgrade request; selects the actor when behind atenet. */
 	targetActor?: string;
+	/** Set for wss; the router requires a podidentity client certificate. */
+	tls?: WebSocketTlsOptions;
 	log?: (message: string) => void;
 }
 
@@ -148,10 +160,43 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 function openSocket(options: WebSocketTransportOptions): Promise<WebSocket> {
 	return new Promise((resolve, reject) => {
+		// The protected volume is read on every connect: podCertificate
+		// credentials rotate, so holding the bytes from startup would present an
+		// expired certificate after the first rotation.
 		const socket = new WebSocket(options.url, {
 			headers: options.targetActor ? { "ate-target-actor": options.targetActor } : {},
+			...loadTls(options.tls),
 		});
 		socket.once("open", () => resolve(socket));
 		socket.once("error", (error) => reject(error instanceof Error ? error : new Error(String(error))));
 	});
+}
+
+/**
+ * The router's credential bundle is one PEM holding the private key and the
+ * certificate chain, key first. Node rejects that file as `cert` ("no start
+ * line") and only accepts a certificate-only PEM, so the blocks are split.
+ */
+function loadTls(tls: WebSocketTlsOptions | undefined): WebSocketTlsOptions | undefined {
+	if (!tls) return undefined;
+	const ca = readPem(tls.ca);
+	const bundle = readPem(tls.cert);
+	const key = readPem(tls.key);
+	return {
+		ca,
+		cert: bundle === undefined ? undefined : pemBlocks(bundle, "CERTIFICATE"),
+		key: key === undefined ? undefined : pemBlocks(key, "PRIVATE KEY") ?? key,
+	};
+}
+
+function readPem(value: string | Buffer | undefined): string | undefined {
+	if (value === undefined) return undefined;
+	const text = Buffer.isBuffer(value) ? value.toString("utf8") : value;
+	return text.includes("-----BEGIN ") ? text : readFileSync(text, "utf8");
+}
+
+function pemBlocks(pem: string, type: "CERTIFICATE" | "PRIVATE KEY"): string | undefined {
+	const label = type === "PRIVATE KEY" ? "[A-Z ]*PRIVATE KEY" : "CERTIFICATE";
+	const blocks = pem.match(new RegExp(`-----BEGIN ${label}-----[\\s\\S]*?-----END ${label}-----`, "g"));
+	return blocks?.join("\n");
 }

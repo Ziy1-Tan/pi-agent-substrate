@@ -62,6 +62,22 @@ The provider is default-deny: the policy ConfigMap ships as `policies: []`, so
 every injection returns 403 until the atespace is listed. It reads that
 ConfigMap once at startup, so restart the deployment after editing.
 
+## v1.0.0 schema
+
+A template name and an actor name may not contain dots: `pi-local-v1.0.0` is
+rejected with `must not contain dots`. Use dashes (`pi-local-v1-0-0`).
+
+`deploy/test/actor-template.json.tmpl` follows the v1.0.0 protojson schema:
+no `sandboxConfig`, no `snapshotConfig.storageLocation` (it needs the
+`PerTemplateSnapshotLocation` preview gate), and limits in integer units
+(`cpuMillicores`, `memoryBytes`), not Kubernetes quantities. The sandbox class
+is selected by `workerSelector.matchLabels`, matched against the WorkerPool's
+labels; there is no template field for it. WorkerPools are `ate.dev/v1`.
+
+`kubectl ate delete actor` no longer accepts `--any-state`. The old
+`hack/install-ate-kind.sh` and `hack/create-kind-cluster.sh` are gone; install
+Substrate with its own `ate-setup` command.
+
 ## Templates
 
 ### A wakeup probe disables the golden-snapshot warmup
@@ -143,15 +159,50 @@ one that produced no text. The bridge sends `bridge_result` before Pi's own
 Pi retries with a 2s/4s/8s backoff; set `{"retry":{"enabled":false}}` in a
 test agent's `settings.json` or a one-second injected failure takes fourteen.
 
+## In-cluster gateway
+
+The local deployment runs the gateway as a Deployment in `pi-gateway`, not on
+the workstation. It reaches actors over `wss://atenet-router.ate-system.svc:443`
+with a projected podidentity client certificate; the router must list
+`spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway` in
+`--ingress-allowed-spiffe-ids`. `deploy-local.sh` checks this and stops early
+when it is missing.
+
+Three permissions are easy to miss. `kubectl-ate` resolves the ate-api Service
+before port-forwarding, so the SA needs `get,list` on `services` in
+`ate-system`, and the port-forward upgrade is authorized as `get` (not only
+`create`) on `pods/portforward`. It also mints a token for the shared
+`ate-client` ServiceAccount, needing `create` on `serviceaccounts/token` with
+that `resourceName`.
+
+The projected credential bundle is one PEM with the private key first and the
+certificate chain second. Node rejects that file as `cert` with
+`PEM routines::no start line`; `src/host/websocket.ts` splits the blocks on
+every connect so a rotated credential is picked up.
+
+`kubectl ate proxy actor` is the workstation path. It mints a certificate for
+the `atenet-client` SA, so the router's allowlist needs that SPIFFE ID too.
+`PI_INGRESS_MODE=proxy` makes the gateway start one proxy per conversation.
+
 ## Local deployment
 
-`hack/deploy-local.sh` builds the image, creates a template from
-`deploy/local/provider.env` (provider, model, endpoint, wire API, key), writes
-the key to a Secret, grants the atespace access, and prints the gateway
-command. The bridge composes Pi's `models.json` from the non-secret values.
+`hack/deploy-local.sh` builds the actor and gateway images, creates the
+atespace, the WorkerPool, the template (`pi-local-v1-0-0` by default), the
+provider Secret, the atespace's credential-provider grant, the actor, and the
+in-cluster gateway. The provider values come from `deploy/local/provider.env`;
+the key goes to a Secret and never enters the actor. The bridge composes Pi's
+`models.json` from the non-secret values.
+
 Two names must match the gateway: the actor name derives from the conversation
-id (`local/chat` → `pi-local-chat`),
-and `PI_ACTOR_TEMPLATE` defaults to `pi-actor` while a local deploy creates
-`pi-local`. BSD `sed` has no `\+`; use `-E`. `read` fails on input without a
-trailing newline, which ends the script under `errexit`. zsh's nvm loader
-breaks `node` in compound commands; use the absolute path or `bash`.
+id (`local/chat` → `pi-local-chat`), and `deploy-local.sh` pre-creates the
+actor under that name. `PI_ACTOR_TEMPLATE` defaults to `pi-actor` while a local
+deploy creates `pi-local-v1-0-0`; override it when running the gateway by hand.
+
+The local registry can hold an old `ateom-microvm:latest` from a source build
+that rejects the controller's `--pod-ips` flag. Pull the release worker image
+and push it under a version tag instead (the deploy needs
+`WORKER_IMAGE=localhost:5001/ateworker-microvm:v1.0.0` on this host).
+
+BSD `sed` has no `\+`; use `-E`. `read` fails on input without a trailing
+newline, which ends the script under `errexit`. zsh's nvm loader breaks `node`
+in compound commands; use `bash -lc` (or the absolute binary path).

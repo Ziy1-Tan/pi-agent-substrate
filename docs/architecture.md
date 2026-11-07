@@ -29,11 +29,13 @@ and re-align state.
 
 Presence and cognition are separate concerns. The resident gateway is an
 ordinary process, not an actor and not in a WorkerPool; it holds the channel
-connections, the conversation mapping, and the chat log. Each conversation has
-its own actor, which runs `pi --mode rpc` and holds `/workspace`, the session
-files, and the process state. A message is forwarded to the actor, which the
-router resumes if it was suspended; after `agent_settled` and an idle window
-with no work in flight, the gateway suspends it again.
+connections, the conversation mapping, and the chat log. The local deployment
+runs it as a Deployment in the cluster next to the workers, with its data on a
+PVC. Each conversation has its own actor, which runs `pi --mode rpc` and holds
+`/workspace`, the session files, and the process state. A message is forwarded
+to the actor, which the router resumes if it was suspended; after
+`agent_settled` and an idle window with no work in flight, the gateway suspends
+it again.
 
 ### State ownership
 
@@ -75,8 +77,11 @@ The Substrate core is not modified.
 
 ### Interface contracts
 
-Gateway to actor: a WebSocket carrying JSONL records, routed by the
-`ate-target-actor: <atespace>/<actor>` header. Commands: `prompt`, `get_state`,
+Gateway to actor: a WebSocket carrying JSONL records. In router mode it dials
+atenet-router with a client certificate and selects the actor with the
+`ate-target-actor: <atespace>/<actor>` header. In proxy mode the gateway starts
+one `kubectl-ate proxy actor` per conversation and connects to its local
+listener, so the route comes from the tunnel. Commands: `prompt`, `get_state`,
 `abort`, `clear_queue`, `new_session`. Events: `message_update`, `tool_call`,
 `agent_settled`, and Pi's other session events. Commands carry an `id` that
 responses echo; clients never depend on response ordering. The gateway must

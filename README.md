@@ -122,13 +122,15 @@ in-cluster pod identity provides.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PI_ACTOR_URL` | required | Router WebSocket, `wss://` in the cluster |
-| `PI_ROUTER_CA` | unset | CA bundle for a `wss` router |
-| `PI_ROUTER_CERT` / `PI_ROUTER_KEY` | unset | Client credential for the router's mTLS ingress; may be the same projected bundle |
-| `PI_ATESPACE` | `pi-agents` | Atespace that holds the actors |
-| `PI_ACTOR_TEMPLATE` | `pi-actor` | Template used to create a missing actor |
-| `PI_EGRESS_POLICY` | `deploy/e2e/egress-policy.yaml` | Applied to each new actor |
-| `PI_IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
+| `ATESPACE` | `pi-agents` | Atespace that holds the actors |
+| `ACTOR_TEMPLATE` | `pi-actor` | Template used to create a missing actor |
+| `EGRESS_POLICY` | `/etc/pi/egress-policy.yaml` | Applied to each new actor |
+| `IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
+
+The router URL and its client certificate are fixed by the Deployment: the
+gateway runs in the cluster and speaks to `atenet-router` with its projected
+podidentity certificate. `PI_*` variables configure Pi itself and are read by
+the actor, not the gateway.
 
 ## How it works
 

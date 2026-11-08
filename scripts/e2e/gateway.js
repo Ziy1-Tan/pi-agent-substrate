@@ -23,7 +23,7 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 
 function ateClient() {
-	const atespace = process.env.PI_ATESPACE ?? "pi-agents";
+	const atespace = process.env.E2E_ATESPACE ?? "pi-agents";
 	const kubectlAte = process.env.KUBECTL_ATE ?? "kubectl-ate";
 	const kubeContext = process.env.KUBE_CONTEXT;
 	const ate = async (...args) => {
@@ -94,10 +94,10 @@ function createChecks(log) {
 }
 
 const { atespace, ate } = ateClient();
-const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 12);
-const port = Number(process.env.PI_HTTP_PORT ?? 8899);
-const actorPrefix = process.env.PI_ACTOR_PREFIX ?? "pi-";
-const conversations = (process.env.PI_E2E_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
+const idleSeconds = Number(process.env.E2E_IDLE_SECONDS ?? 12);
+const port = Number(process.env.E2E_HTTP_PORT ?? 8899);
+const actorPrefix = "pi-";
+const conversations = (process.env.E2E_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
 
 const log = (message) => console.log(`[gateway-e2e] ${message}`);
 const { check, checks } = createChecks(log);

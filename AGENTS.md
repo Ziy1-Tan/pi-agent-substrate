@@ -189,7 +189,7 @@ goes to a Secret and never enters the actor. The bridge composes Pi's
 `models.json` from the non-secret values.
 
 The gateway creates the actor on the first message, named from the
-conversation id (`local/chat` → `pi-local-chat`). `PI_ACTOR_TEMPLATE` defaults
+conversation id (`local/chat` → `pi-local-chat`). `ACTOR_TEMPLATE` defaults
 to `pi-actor` while a local deploy creates `pi-local-v1-0-0`; override it when
 running the gateway by hand.
 

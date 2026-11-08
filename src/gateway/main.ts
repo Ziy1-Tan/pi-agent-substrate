@@ -9,46 +9,39 @@
  * creates it on first use, the router resumes a suspended one, and the idle
  * lifecycle suspends it again once the turn is recorded.
  *
- * Configuration is environment only:
+ * The gateway runs as a Deployment next to the workers and speaks to the
+ * router over its projected podidentity certificate; both paths below are
+ * fixed by that deployment. Configuration is environment only:
  *
- *   PI_ACTOR_URL           bridge WebSocket (required)
- *   PI_ROUTER_CA           CA bundle for a wss router (in-cluster gateway)
- *   PI_ROUTER_CERT         client certificate chain for the router
- *   PI_ROUTER_KEY          private key for PI_ROUTER_CERT
- *   PI_ATESPACE            atespace that holds the actors
- *   PI_ACTOR_TEMPLATE      template used to create a missing actor
- *   PI_EGRESS_POLICY       manifest applied to each new actor (default
- *                          `deploy/e2e/egress-policy.yaml`; empty disables it)
- *   PI_IDLE_SECONDS        idle window before suspend (0 disables, default 60)
+ *   ATESPACE             atespace that holds the actors (default pi-agents)
+ *   ACTOR_TEMPLATE       template used to create a missing actor (default pi-actor)
+ *   EGRESS_POLICY        manifest applied to each new actor (default
+ *                        /etc/pi/egress-policy.yaml, where the manifest mounts it)
+ *   IDLE_SECONDS         idle window before suspend (0 disables, default 60)
+ *
+ * The `PI_*` variables configure Pi itself and are read by the actor, not
+ * here: `PI_PROVIDER`, `PI_MODEL`, `PI_BIN`, and the model metadata.
  */
 import { GatewayManager } from "./manager.js";
 import { startHttpServer } from "./server.js";
 import { KubectlAteControl } from "./substrate/kubectl.js";
 
-const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 60);
-const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/e2e/egress-policy.yaml";
-
-const routerTls = {
-	ca: process.env.PI_ROUTER_CA,
-	cert: process.env.PI_ROUTER_CERT,
-	key: process.env.PI_ROUTER_KEY,
-};
-
-const actorUrl = process.env.PI_ACTOR_URL;
-if (!actorUrl) throw new Error("PI_ACTOR_URL is required");
-
 const manager = new GatewayManager({
-	actorUrl,
-	transportTls: routerTls.ca || routerTls.cert || routerTls.key ? routerTls : undefined,
+	actorUrl: "wss://atenet-router.ate-system.svc:443",
+	transportTls: {
+		ca: "/run/pi-router/router-ca.pem",
+		cert: "/run/pi-router/credential-bundle.pem",
+		key: "/run/pi-router/credential-bundle.pem",
+	},
 	control: new KubectlAteControl({
-		template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
+		template: process.env.ACTOR_TEMPLATE ?? "pi-actor",
 		log: (message) => console.error(`[substrate] ${message}`),
 	}),
-	atespace: process.env.PI_ATESPACE ?? "pi-agents",
+	atespace: process.env.ATESPACE ?? "pi-agents",
 	// Without an egress policy the sandbox cannot reach the model, and the
 	// failure looks like an empty reply rather than an error.
-	egressPolicy: egressPolicy || undefined,
-	idleMs: idleSeconds * 1000,
+	egressPolicy: process.env.EGRESS_POLICY ?? "/etc/pi/egress-policy.yaml",
+	idleMs: Number(process.env.IDLE_SECONDS ?? 60) * 1000,
 	log: (message) => console.error(`[gateway] ${message}`),
 });
 
@@ -59,7 +52,7 @@ const server = await startHttpServer({
 	log: (message) => console.error(`[http] ${message}`),
 });
 
-console.log(`gateway on http://127.0.0.1:${server.port}/messages`);
+console.log(`gateway on :${server.port}/messages`);
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.on(signal, () => {

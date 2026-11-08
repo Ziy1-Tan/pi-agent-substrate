@@ -181,10 +181,10 @@ if [[ "${ONLY}" != "deploy" ]]; then
   trap 'kill ${gateway_forward:-} 2>/dev/null || true' EXIT
 
   echo "==> running the gateway e2e"
-  PI_ATESPACE="${ATESPACE}" \
+  E2E_ATESPACE="${ATESPACE}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
-    PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_HTTP_PORT="${HTTP_PORT}" \
-    PI_E2E_CONVERSATIONS="${CONVERSATIONS}" \
+    E2E_IDLE_SECONDS="${IDLE_SECONDS}" E2E_HTTP_PORT="${HTTP_PORT}" \
+    E2E_CONVERSATIONS="${CONVERSATIONS}" \
     node scripts/e2e/gateway.js
 
   echo "==> removing the e2e gateway"

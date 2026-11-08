@@ -70,8 +70,8 @@ KUBE_CONTEXT=kind-pi-v1 SANDBOX_CLASS_NAME=microvm ./scripts/e2e/kind.sh   # moc
 `deploy-local.sh` builds the actor and gateway images, creates the atespace,
 the WorkerPool, the actor template, the provider Secret, the egress policy,
 and the in-cluster gateway. It prints the port-forward command for the
-gateway's HTTP API. The bridge builds Pi's model catalog at startup. The e2e
-needs no key or network.
+gateway's HTTP API. The gateway creates the conversation's actor on the first
+message. The e2e needs no key or network.
 
 A microVM pool needs a worker image that matches the installed Substrate. A
 dev install built from source may leave an older image under the local
@@ -132,19 +132,9 @@ in-cluster pod identity provides.
 
 ## How it works
 
-The gateway and the actor are separate processes that talk over a WebSocket.
-The actor runs a bridge exposing `pi --mode rpc` as JSONL records; the gateway
-relays one turn per request and owns the idle timer.
-
-```text
-IDLE ──prompt──> ACTIVE ──settled──> GRACE ──idle──> SUSPENDING ──> SUSPENDED
-```
-
-A suspend is never issued mid-turn, because substrate cancels in-flight work
-rather than draining it, and nothing reconnects on its own, because connecting
-is what wakes an actor.
-
-Protocol, state machines, and the reasoning behind each choice are in
+Each conversation maps to one actor. The gateway relays a turn over a
+WebSocket and suspends the actor after the idle window; connecting is what
+wakes it. The state machines and protocol are in
 [docs/architecture.md](docs/architecture.md).
 
 ## Development

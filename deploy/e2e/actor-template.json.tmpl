@@ -58,16 +58,9 @@ containers:
     value: /run/ate/egress-trust-bundle/trust-bundle.pem
   - name: SSL_CERT_FILE
     value: /run/ate/egress-trust-bundle/trust-bundle.pem
-  # Deliberately no wakeupProbe. Declaring one on every container drops the
-  # controller's golden-snapshot warmup to zero
-  # (goldenSnapshotWarmupFor in template_reconciler.go): the probe is trusted
-  # to mean "ready", and here it does not. The bridge answers /healthz as soon
-  # as it binds the port, roughly 500ms after start, and snapshotting a Node
-  # process at that moment produces a restore whose bridge never listens again
-  # -- the resume then times out on the same probe and the actor is CRASHED.
-  # Without a probe the controller waits its 20s warmup. v1.0.0 still supports
-  # that fallback. Switch to a probe only after /healthz answers 503 until the
-  # process is old enough for the snapshot to be safe.
+  # Deliberately no wakeupProbe: declaring one drops the controller's
+  # golden-snapshot warmup to zero, and this bridge answers /healthz before the
+  # state worth snapshotting exists. The incident is in AGENTS.md.
   volumeMounts:
   - name: workspace
     mountPath: /workspace

@@ -183,21 +183,21 @@ every connect so a rotated credential is picked up.
 
 `scripts/deploy-local.sh` builds the actor and gateway images, creates the
 atespace, the WorkerPool, the template (`pi-local-v1-0-0` by default), the
-provider Secret, the atespace's credential-provider grant, the actor, and the
-in-cluster gateway. The provider values come from `deploy/local/provider.env`;
-the key goes to a Secret and never enters the actor. The bridge composes Pi's
+provider Secret, the atespace's credential-provider grant, and the in-cluster
+gateway. The provider values come from `deploy/local/provider.env`; the key
+goes to a Secret and never enters the actor. The bridge composes Pi's
 `models.json` from the non-secret values.
 
-Two names must match the gateway: the actor name derives from the conversation
-id (`local/chat` → `pi-local-chat`), and `deploy-local.sh` pre-creates the
-actor under that name. `PI_ACTOR_TEMPLATE` defaults to `pi-actor` while a local
-deploy creates `pi-local-v1-0-0`; override it when running the gateway by hand.
+The gateway creates the actor on the first message, named from the
+conversation id (`local/chat` → `pi-local-chat`). `PI_ACTOR_TEMPLATE` defaults
+to `pi-actor` while a local deploy creates `pi-local-v1-0-0`; override it when
+running the gateway by hand.
 
 The local registry can hold an old `ateom-microvm:latest` from a source build
 that rejects the controller's `--pod-ips` flag. Pull the release worker image
 and push it under a version tag instead (the deploy needs
 `WORKER_IMAGE=localhost:5001/ateworker-microvm:v1.0.0` on this host).
 
-BSD `sed` has no `\+`; use `-E`. `read` fails on input without a trailing
-newline, which ends the script under `errexit`. zsh's nvm loader breaks `node`
-in compound commands; use `bash -lc` (or the absolute binary path).
+`read` fails on input without a trailing newline, which ends the script under
+`errexit`. zsh's nvm loader breaks `node` in compound commands; use `bash -lc`
+(or the absolute binary path).

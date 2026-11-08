@@ -22,7 +22,7 @@ and re-align state.
 
 | Layer | Role | Source |
 |---|---|---|
-| Channel | Where the human speaks | The HTTP adapter in `src/gateway/channel/` |
+| Channel | Where the human speaks | The HTTP adapter in `src/gateway/server.ts` |
 | Gateway | Turn relay and lifecycle decisions | `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
 | Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
@@ -58,11 +58,10 @@ with no work in flight, the gateway suspends it again.
 
 ## Components
 
-The gateway is a standalone process that does not run the agent: the HTTP
-channel (`channel/`), the RPC relay (`backend.ts`, `websocket.ts`), and
-everything it asks of Substrate (`substrate/`: actor name from conversation
-id, create-if-absent, egress policy, idle suspension, and the control-plane
-client).
+The gateway is a standalone process that does not run the agent. It accepts
+`POST /messages`, maps a conversation id to an actor, relays one turn over a
+WebSocket, and owns the idle lifecycle. Everything it asks of Substrate —
+create, suspend, apply egress — goes through one control interface.
 
 The actor image is a WebSocket-to-stdio bridge in front of
 `pi --mode rpc --session-dir /workspace/.pi`, on a pinned Node base image, with
@@ -77,11 +76,11 @@ The Substrate core is not modified.
 
 Gateway to actor: a WebSocket carrying JSONL records. It dials atenet-router
 with a client certificate and selects the actor with the
-`ate-target-actor: <atespace>/<actor>` header. Commands: `prompt`, `get_state`,
-`abort`, `clear_queue`, `new_session`. Events: `message_update`, `tool_call`,
-`agent_settled`, and Pi's other session events. Commands carry an `id` that
-responses echo; clients never depend on response ordering. The gateway must
-keep reading so a slow socket cannot block the actor's stdout.
+`ate-target-actor: <atespace>/<actor>` header. The gateway sends `prompt`; the
+bridge relays Pi's other commands unchanged. Events: `message_update`,
+`tool_call`, `agent_settled`, and Pi's other session events. Commands carry an
+`id` that responses echo; clients never depend on response ordering. The
+gateway must keep reading so a slow socket cannot block the actor's stdout.
 
 The bridge adds one extension: `bridge_result` carries the `requestId` when a
 turn settles. Pi's own `agent_settled` does not identify the turn, so this is

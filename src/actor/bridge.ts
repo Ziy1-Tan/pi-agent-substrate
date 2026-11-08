@@ -41,9 +41,9 @@ export interface TurnResult {
 
 /**
  * Runtime-agnostic bridge: it exposes Pi's stdio RPC as a WebSocket inside the
- * actor. Whatever reaches this port already had its actor routing resolved by
- * atenet-router or by the local gateway, so the bridge carries no per-client
- * identity and takes no lifecycle decisions.
+ * actor. atenet-router resolves the actor before a record reaches this port,
+ * so the bridge carries no per-client identity and takes no lifecycle
+ * decisions.
  *
  * When a turn settles the bridge emits `bridge_result` alongside Pi's own
  * `agent_settled`, because Pi's event does not carry the request id.

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { Gateway } from "../src/gateway/gateway.js";
+import { Conversation } from "../src/gateway/manager.js";
 import { IdleLifecycle } from "../src/gateway/substrate/idle.js";
 import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/gateway/substrate/control.js";
 
@@ -59,7 +59,7 @@ function setup(idleMs: number, backend = new StubBackend()) {
 		idleMs,
 		clock,
 	});
-	const gateway = new Gateway({ backend, lifecycle });
+	const gateway = new Conversation({ actor: { atespace: "pi-agents", name: "pi-test" }, backend, lifecycle });
 	return { clock, control, lifecycle, gateway, backend };
 }
 

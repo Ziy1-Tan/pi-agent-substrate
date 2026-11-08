@@ -1,4 +1,18 @@
-import type { AgentBackend, AgentRequest, AgentResponse } from "./types.js";
+export interface AgentRequest {
+	requestId: string;
+	prompt: string;
+}
+
+export interface AgentResponse {
+	text: string;
+	/** Set when the turn failed, so the caller gets an error instead of silence. */
+	error?: string;
+}
+
+export interface AgentBackend {
+	submit(request: AgentRequest): Promise<AgentResponse>;
+	close?(): Promise<void>;
+}
 
 /** The transport the gateway needs to reach one conversation's actor. */
 export interface ActorTransport {
@@ -10,8 +24,6 @@ export interface ActorTransport {
 	/** Receives connection loss. Called at most once per connection. */
 	onClose(listener: () => void): void;
 	close(): Promise<void>;
-	/** True while records can be sent. */
-	readonly connected: boolean;
 }
 
 export interface PiBackendOptions {

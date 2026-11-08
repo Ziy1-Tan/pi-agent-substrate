@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Gateway } from "../src/gateway/gateway.js";
-import { Metrics } from "../src/gateway/metrics.js";
+import { Conversation, Metrics } from "../src/gateway/manager.js";
 import { StubBackend } from "./support/stub-backend.js";
 
 test("turns that follow a suspend are counted as resumed", async () => {
 	const metrics = new Metrics();
 	let state = "ACTIVE";
-	const gateway = new Gateway({
+	const gateway = new Conversation({
+		actor: { atespace: "pi-agents", name: "pi-test" },
 		backend: new StubBackend(),
 		lifecycle: {
 			async ready() {},

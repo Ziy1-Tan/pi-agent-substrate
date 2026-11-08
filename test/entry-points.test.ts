@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { startHttpServer, type HttpServer } from "../src/gateway/channel/server.js";
+import { startHttpServer, type HttpServer } from "../src/gateway/server.js";
 import { GatewayManager } from "../src/gateway/manager.js";
 import { ActorProvisioner } from "../src/gateway/substrate/provisioner.js";
 

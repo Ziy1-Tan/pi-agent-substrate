@@ -5,8 +5,8 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { GatewayManager, type ConversationSpec } from "../manager.js";
-import type { AgentResponse } from "../types.js";
+import { GatewayManager, type ConversationSpec } from "./manager.js";
+import type { AgentResponse } from "./backend.js";
 
 export interface HttpServerOptions {
 	manager: GatewayManager;

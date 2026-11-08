@@ -6,12 +6,12 @@ import test, { type TestContext } from "node:test";
 
 import { PiBackend } from "../src/gateway/backend.js";
 import { startBridge, type Bridge } from "../src/actor/bridge.js";
-import { Gateway } from "../src/gateway/gateway.js";
+import { Conversation } from "../src/gateway/manager.js";
 import { WebSocketTransport } from "../src/gateway/websocket.js";
 import { resolvePiBin, startMockLlm, writePiConfig } from "./support/bridge-harness.js";
 
 interface E2EHarness {
-	gateway: Gateway;
+	gateway: Conversation;
 	/** Stops the actor the way a suspend would, keeping its workspace. */
 	suspend(): Promise<void>;
 	/** Starts a fresh actor process over the same workspace. */
@@ -46,7 +46,7 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 		log: process.env.PI_E2E_LOG ? (message) => console.error(`[transport] ${message}`) : () => undefined,
 	});
 	const backend = new PiBackend({ transport, turnTimeoutMs: 30_000 });
-	const gateway = new Gateway({ backend });
+	const gateway = new Conversation({ actor: { atespace: "pi-agents", name: "pi-test" }, backend });
 
 	const harness: E2EHarness = {
 		gateway,
@@ -61,8 +61,7 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 			if (!bridge) await startActor();
 		},
 		async close() {
-			await gateway.stop().catch(() => undefined);
-			await backend.close().catch(() => undefined);
+			await gateway.close().catch(() => undefined);
 			await bridge?.close().catch(() => undefined);
 			await llm.close();
 			await rm(root, { recursive: true, force: true });

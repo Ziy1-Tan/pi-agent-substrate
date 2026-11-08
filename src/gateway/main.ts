@@ -22,7 +22,7 @@
  *   PI_IDLE_SECONDS        idle window before suspend (0 disables, default 60)
  */
 import { GatewayManager, type ConversationSpec } from "./manager.js";
-import { startHttpServer } from "./channel/server.js";
+import { startHttpServer } from "./server.js";
 import { KubectlAteControl } from "./substrate/kubectl.js";
 import { ActorProvisioner } from "./substrate/provisioner.js";
 

@@ -67,7 +67,7 @@ ConfigMap once at startup, so restart the deployment after editing.
 A template name and an actor name may not contain dots: `pi-local-v1.0.0` is
 rejected with `must not contain dots`. Use dashes (`pi-local-v1-0-0`).
 
-`deploy/e2e/actor-template.json.tmpl` follows the v1.0.0 protojson schema:
+`deploy/actor-template.json` follows the v1.0.0 protojson schema:
 no `sandboxConfig`, no `snapshotConfig.storageLocation` (it needs the
 `PerTemplateSnapshotLocation` preview gate), and limits in integer units
 (`cpuMillicores`, `memoryBytes`), not Kubernetes quantities. The sandbox class
@@ -164,7 +164,7 @@ The local deployment runs the gateway as a Deployment in `pi-gateway`, not on
 the workstation. It reaches actors over `wss://atenet-router.ate-system.svc:443`
 with a projected podidentity client certificate; the router must list
 `spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway` in
-`--ingress-allowed-spiffe-ids`. `deploy-local.sh` checks this and stops early
+`--ingress-allowed-spiffe-ids`. `deploy/local.sh` checks this and stops early
 when it is missing.
 
 Three permissions are easy to miss. `kubectl-ate` resolves the ate-api Service
@@ -181,10 +181,10 @@ every connect so a rotated credential is picked up.
 
 ## Local deployment
 
-`scripts/deploy-local.sh` builds the actor and gateway images, creates the
+`deploy/local.sh` builds the actor and gateway images, creates the
 atespace, the WorkerPool, the template (`pi-local-v1-0-0` by default), the
 provider Secret, the atespace's credential-provider grant, and the in-cluster
-gateway. The provider values come from `deploy/local/provider.env`; the key
+gateway. The provider values come from `deploy/provider.env`; the key
 goes to a Secret and never enters the actor. The bridge composes Pi's
 `models.json` from the non-secret values.
 

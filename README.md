@@ -61,13 +61,13 @@ without nested virtualization, add `--sandbox-classes=gvisor`.
 ### Run it
 
 ```sh
-cp deploy/local/provider.env.example deploy/local/provider.env
-$EDITOR deploy/local/provider.env     # provider, model, endpoint, API, key
-KUBE_CONTEXT=kind-pi-v1 ./scripts/deploy-local.sh                # real model
-KUBE_CONTEXT=kind-pi-v1 SANDBOX_CLASS_NAME=microvm ./scripts/e2e/kind.sh   # mock model
+cp deploy/provider.env.example deploy/provider.env
+$EDITOR deploy/provider.env            # provider, model, endpoint, API, key
+KUBE_CONTEXT=kind-pi-v1 ./deploy/local.sh                       # real model
+KUBE_CONTEXT=kind-pi-v1 ./deploy/e2e.sh                          # mock model
 ```
 
-`deploy-local.sh` builds the actor and gateway images, creates the atespace,
+`deploy/local.sh` builds the actor and gateway images, creates the atespace,
 the WorkerPool, the actor template, the provider Secret, the egress policy,
 and the in-cluster gateway. It prints the port-forward command for the
 gateway's HTTP API. The gateway creates the conversation's actor on the first
@@ -81,7 +81,7 @@ registry's `latest` tag; set `WORKER_IMAGE` to the release image, for example
 ### Provider settings
 
 A single model call needs five values. They live in
-`deploy/local/provider.env`, which is gitignored:
+`deploy/provider.env`, which is gitignored:
 
 | Variable | Meaning |
 |---|---|
@@ -114,7 +114,7 @@ curl -s localhost:8788/messages \
 
 `GET /metrics` returns counters for turns, suspends, and resumed turns.
 
-`deploy-local.sh` is the supported path. The gateway always reaches actors
+`deploy/local.sh` is the supported path. The gateway always reaches actors
 through atenet-router and needs the client certificate that only the
 in-cluster pod identity provides.
 

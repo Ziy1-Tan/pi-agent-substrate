@@ -23,7 +23,7 @@
 #                     this class, then the release image)
 #   IDLE_SECONDS      idle window before suspend (default: 60)
 #   REGISTRY          image registry (default: localhost:5001)
-#   PROVIDER_ENV      provider config file (default: deploy/local/provider.env)
+#   PROVIDER_ENV      provider config file (default: deploy/provider.env)
 #   PI_PROVIDER / PI_MODEL / PI_PROVIDER_BASE_URL / PI_PROVIDER_API /
 #   PI_PROVIDER_API_KEY
 #                     source provider values, normally from provider.env
@@ -34,15 +34,15 @@ set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
-# shellcheck source=scripts/lib.sh
-. "${ROOT}/scripts/lib.sh"
+# shellcheck source=deploy/lib.sh
+. "${ROOT}/deploy/lib.sh"
 
 SUBSTRATE_VERSION="$(node -p "require('./package.json').substrateVersion")"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
 ATESPACE="${ATESPACE:-pi-agents}"
 ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-local-v1-0-0}"
-PROVIDER_ENV="${PROVIDER_ENV:-deploy/local/provider.env}"
+PROVIDER_ENV="${PROVIDER_ENV:-deploy/provider.env}"
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-microvm}"
 SANDBOX_CONFIG_NAME="$(sandbox_config_name "${SANDBOX_CLASS_NAME}")"
 WORKERPOOL_NAME="pi-workerpool-${SANDBOX_CLASS_NAME}"
@@ -50,12 +50,10 @@ WORKER_IMAGE="${WORKER_IMAGE:-}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
 REGISTRY="${REGISTRY:-localhost:5001}"
 GATEWAY_IMAGE="${REGISTRY}/pi-gateway:local"
-GATEWAY_NAMESPACE=pi-gateway
 GATEWAY_NAME=pi-gateway
-GATEWAY_EGRESS_CONFIGMAP=pi-gateway-egress
+GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_NAME}-egress"
 SUBSTRATE_NAMESPACE=ate-system
 SECRET_NAME=pi-provider
-EGRESS_POLICY=deploy/local/egress-policy.yaml.tmpl
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
 ate=("${KUBECTL_ATE}" --context "${KUBE_CONTEXT}")
@@ -84,7 +82,7 @@ fi
 
 require() {
   if [[ -z "$1" ]]; then
-    echo "$2 is not set; copy deploy/local/provider.env.example to ${PROVIDER_ENV} and fill it in" >&2
+    echo "$2 is not set; copy deploy/provider.env.example to ${PROVIDER_ENV} and fill it in" >&2
     exit 1
   fi
 }
@@ -112,7 +110,7 @@ esac
 
 echo "==> building and pushing the actor image"
 npm run build
-docker build -t "${REGISTRY}/pi-actor:local" -f images/actor/Dockerfile .
+docker build -t "${REGISTRY}/pi-actor:local" -f deploy/actor.Dockerfile .
 docker push "${REGISTRY}/pi-actor:local"
 # A template must pin by digest. `docker inspect` reports the digest of the
 # multi-arch index, and a node that pulls that index can end up with a partial
@@ -134,7 +132,7 @@ ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 echo "==> building and pushing the gateway image"
 mkdir -p bin
 cp "$(command -v "${KUBECTL_ATE}")" bin/kubectl-ate
-docker build -t "${GATEWAY_IMAGE}" -f images/gateway/Dockerfile .
+docker build -t "${GATEWAY_IMAGE}" -f deploy/gateway.Dockerfile .
 docker push "${GATEWAY_IMAGE}"
 
 echo "==> ensuring atespace ${ATESPACE}"
@@ -156,7 +154,7 @@ ATESPACE="${ATESPACE}" WORKERPOOL_NAME="${WORKERPOOL_NAME}" \
   SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME}" \
   WORKER_IMAGE="${WORKER_IMAGE}" \
   envsubst '${ATESPACE} ${WORKERPOOL_NAME} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME} ${WORKER_IMAGE}' \
-  < deploy/workerpool.yaml.tmpl | "${kube[@]}" apply -f -
+  < deploy/workerpool.yaml | "${kube[@]}" apply -f -
 "${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=300s
 
 # `read` needs a terminating newline: without one it returns non-zero and
@@ -170,12 +168,10 @@ PROVIDER_PORT="${inferred_port}"
 CREDENTIAL_URI="ate-secret://k8s.io/default/${ATESPACE}/${SECRET_NAME}/api-key"
 RENDERED_POLICY=bin/egress-policy.yaml
 echo "==> rendering the egress policy for ${PROVIDER_HOST}"
-sed -e "s#\${PROVIDER_HOST}#${PROVIDER_HOST}#" \
-    -e "s#\${PROVIDER_PORT}#${PROVIDER_PORT}#" \
-    -e "s#\${AUTH_HEADER}#${AUTH_HEADER}#" \
-    -e "s#\${AUTH_PREFIX}#${AUTH_PREFIX}#" \
-    -e "s#\${CREDENTIAL_URI}#${CREDENTIAL_URI}#" \
-    "${EGRESS_POLICY}" > "${RENDERED_POLICY}"
+PROVIDER_HOST="${PROVIDER_HOST}" PROVIDER_PORT="${PROVIDER_PORT}" \
+AUTH_HEADER="${AUTH_HEADER}" AUTH_PREFIX="${AUTH_PREFIX}" CREDENTIAL_URI="${CREDENTIAL_URI}" \
+envsubst '${PROVIDER_HOST} ${PROVIDER_PORT} ${AUTH_HEADER} ${AUTH_PREFIX} ${CREDENTIAL_URI}' \
+  < deploy/egress-policy.yaml > "${RENDERED_POLICY}"
 
 echo "==> creating the provider secret"
 "${kube[@]}" -n "${ATESPACE}" create secret generic "${SECRET_NAME}" \
@@ -238,7 +234,7 @@ if ! printf '%s' "${tag}" | grep -qE '[0-9a-f]{8}-'; then
   exit 1
 fi
 
-gateway_spiffe="spiffe://cluster.local/ns/${GATEWAY_NAMESPACE}/sa/pi-gateway"
+gateway_spiffe="spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway"
 if ! "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get deploy atenet-router -o yaml 2>/dev/null | grep -q "${gateway_spiffe}"; then
   echo "atenet-router does not allow ${gateway_spiffe}" >&2
   echo "reinstall substrate with --ingress-allowed-spiffe-ids=${gateway_spiffe}" >&2
@@ -246,20 +242,18 @@ if ! "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get deploy atenet-router -o yaml 2
 fi
 
 echo "==> creating the gateway namespace and inputs"
-"${kube[@]}" create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | "${kube[@]}" apply -f -
-"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
+"${kube[@]}" create namespace pi-gateway --dry-run=client -o yaml | "${kube[@]}" apply -f -
+"${kube[@]}" -n pi-gateway create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
   --from-file=egress-policy.yaml="${RENDERED_POLICY}" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -
 
 echo "==> applying the gateway"
-GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" GATEWAY_NAME="${GATEWAY_NAME}" \
-  GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP}" \
-  SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
+GATEWAY_NAME="${GATEWAY_NAME}" GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP}" \
   GATEWAY_IMAGE="${GATEWAY_IMAGE}" ATESPACE="${ATESPACE}" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
   IDLE_SECONDS="${IDLE_SECONDS}" \
-  envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS}' \
-  < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
-"${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status "deploy/${GATEWAY_NAME}" --timeout=180s
+  envsubst '${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS}' \
+  < deploy/gateway.yaml | "${kube[@]}" apply -f -
+"${kube[@]}" -n pi-gateway rollout status "deploy/${GATEWAY_NAME}" --timeout=180s
 
 cat <<EOF
 
@@ -267,7 +261,7 @@ cat <<EOF
 
 Reach the gateway API from this machine:
 
-  kubectl --context ${KUBE_CONTEXT} -n ${GATEWAY_NAMESPACE} port-forward svc/${GATEWAY_NAME} 8788:8788 &
+  kubectl --context ${KUBE_CONTEXT} -n pi-gateway port-forward svc/${GATEWAY_NAME} 8788:8788 &
   curl -s -X POST http://127.0.0.1:8788/messages \\
     -H 'content-type: application/json' \\
     -d '{"conversation":"local/chat","text":"hello"}'

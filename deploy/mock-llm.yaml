@@ -1,5 +1,5 @@
 # Mock LLM for the clustered e2e. The namespace and WorkerPool come from
-# deploy/workerpool.yaml.tmpl, which scripts/e2e/kind.sh applies first.
+# deploy/workerpool.yaml, which deploy/e2e.sh applies first.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

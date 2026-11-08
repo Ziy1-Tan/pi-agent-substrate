@@ -4,7 +4,7 @@
 # sandbox-class selector means creating a new template (and a new actor that
 # uses it).
 #
-# ${...} placeholders are filled by scripts/lib.sh render_actor_template:
+# ${...} placeholders are filled by deploy/lib.sh render_actor_template:
 #   ACTOR_IMAGE        digest-pinned actor image in the local registry
 #   ACTOR_TEMPLATE     template name
 #   ATESPACE           atespace that holds the actor

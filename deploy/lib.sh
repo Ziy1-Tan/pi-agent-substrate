@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Helpers shared by scripts/deploy-local.sh and scripts/e2e/kind.sh.
+# Helpers shared by deploy/local.sh and deploy/e2e.sh.
 
 # gvisor is the one class whose SandboxConfig is not named after the class.
 sandbox_config_name() {
@@ -53,5 +53,5 @@ render_actor_template() { # <out> <actor-image>
 	API="${PI_PROVIDER_API}" CONTEXT_WINDOW="${PI_MODEL_CONTEXT_WINDOW:-}" \
 	MAX_TOKENS="${PI_MODEL_MAX_TOKENS:-}" SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" \
 	envsubst '${ACTOR_IMAGE} ${ACTOR_TEMPLATE} ${ATESPACE} ${PROVIDER} ${MODEL_ID} ${BASE_URL} ${API} ${CONTEXT_WINDOW} ${MAX_TOKENS} ${SANDBOX_CLASS_NAME}' \
-	< deploy/e2e/actor-template.json.tmpl > "$1"
+	< deploy/actor-template.json > "$1"
 }

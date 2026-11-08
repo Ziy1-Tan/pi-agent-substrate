@@ -1,5 +1,5 @@
 # Gateway image: the always-on Pi gateway plus the kubectl-ate CLI it uses to
-# manage actors. bin/kubectl-ate is filled by scripts/deploy-local.sh from the
+# manage actors. bin/kubectl-ate is filled by deploy/local.sh from the
 # kubectl-ate on PATH, so the image matches the installed substrate release.
 FROM node:22-bookworm-slim
 

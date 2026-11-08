@@ -3,7 +3,7 @@
 #
 # The API key is not here or in the actor: the template holds a placeholder,
 # and `replaceHeaders` swaps the auth header for the Secret's value on the way
-# out. The placeholders are filled in by scripts/deploy-local.sh.
+# out. The placeholders are filled in by deploy/local.sh.
 metadata:
   atespace: pi-agents
   name: default

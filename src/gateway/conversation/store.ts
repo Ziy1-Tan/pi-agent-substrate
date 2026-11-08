@@ -1,13 +1,11 @@
 // Derived from earendil-works/pi-chat at 9adbd29 (Apache-2.0): the conversation
-// log, its lock, and attachment copying come from `src/runtime.ts` and
-// `src/log.ts` there. See THIRD_PARTY_NOTICES.md.
+// log and its lock come from `src/runtime.ts` and `src/log.ts` there. See
+// THIRD_PARTY_NOTICES.md.
 import { randomUUID } from "node:crypto";
-import { appendFile, copyFile, lstat, mkdir, open, readFile, unlink } from "node:fs/promises";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { appendFile, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import type {
-	AttachmentInput,
-	AttachmentKind,
 	ConversationRecord,
 	InboundMessage,
 	InboundRecord,
@@ -16,16 +14,11 @@ import type {
 	JobState,
 	OutboundRecord,
 	PendingJob,
-	StoredAttachment,
 } from "./records.js";
 
 /** Where one conversation lives on the gateway's disk. */
 export interface Conversation {
 	conversationId: string;
-	/** Shown to the agent as `/workspace`. */
-	workspaceDir: string;
-	/** Attachments land here, inside the workspace. */
-	filesDir: string;
 	logPath: string;
 	lockPath: string;
 }
@@ -43,15 +36,12 @@ export async function createConversation(rootDir: string, conversationId = "test
 	const [accountId, channelKey] = conversationId.split("/");
 	if (!accountId || !channelKey) throw new Error(`invalid conversation id: ${conversationId}`);
 	const conversationDir = join(rootDir, "accounts", safeSegment(accountId), "channels", safeSegment(channelKey));
-	const workspaceDir = join(conversationDir, "workspace");
 	const conversation: Conversation = {
 		conversationId,
-		workspaceDir,
-		filesDir: join(workspaceDir, "incoming"),
 		logPath: join(conversationDir, "channel.jsonl"),
 		lockPath: join(conversationDir, ".lock"),
 	};
-	await mkdir(conversation.filesDir, { recursive: true });
+	await mkdir(conversationDir, { recursive: true });
 	return conversation;
 }
 
@@ -76,7 +66,7 @@ export class ConversationStore {
 
 	/** Takes the conversation's lock and reads its log. */
 	static async open(conversation: Conversation, ownerId: string): Promise<ConversationStore> {
-		await mkdir(conversation.filesDir, { recursive: true });
+		await mkdir(dirname(conversation.logPath), { recursive: true });
 		await acquireLock(conversation.lockPath, ownerId);
 		return new ConversationStore(conversation, await readLog(conversation.logPath));
 	}
@@ -95,7 +85,6 @@ export class ConversationStore {
 				userId: input.userId,
 				userName: input.userName,
 				text: input.text.trim(),
-				attachments: await this.storeAttachments(messageId, input.attachments),
 			});
 			const queued = await this.append<JobQueuedRecord>({
 				type: "job_queued",
@@ -213,52 +202,7 @@ export class ConversationStore {
 	}
 
 	private transcriptLines(record: InboundRecord): string[] {
-		const lines = [
-			`- [${record.timestamp}] [uid:${record.userId}] ${record.userName ?? "unknown"}: ${record.text || "(no text)"}`,
-		];
-		if (record.attachments.length > 0) {
-			lines.push("  attachments:");
-			for (const attachment of record.attachments) {
-				const type = attachment.mimeType ? ` (${attachment.mimeType})` : "";
-				lines.push(`  - ${this.guestPath(attachment.localPath)}${type}`);
-			}
-		}
-		return lines;
-	}
-
-	/** The path as the agent sees it, with the workspace mounted at `/workspace`. */
-	private guestPath(localPath: string): string {
-		if (!isInside(this.conversation.workspaceDir, localPath)) return localPath;
-		const suffix = relative(this.conversation.workspaceDir, localPath);
-		return suffix ? `/workspace/${suffix}` : "/workspace";
-	}
-
-	/** Copies attachments into `filesDir` unless a channel already saved them there. */
-	private async storeAttachments(
-		messageId: string,
-		attachments: AttachmentInput[] | undefined,
-	): Promise<StoredAttachment[]> {
-		if (!attachments?.length) return [];
-		const stored: StoredAttachment[] = [];
-		for (const [index, attachment] of attachments.entries()) {
-			const info = await lstat(attachment.path);
-			if (!info.isFile()) throw new Error(`attachment is not a regular file: ${attachment.path}`);
-			const name = safeSegment(attachment.name || basename(attachment.path));
-			const inPlace = isInside(this.conversation.filesDir, attachment.path);
-			const localPath = inPlace
-				? attachment.path
-				: join(this.conversation.filesDir, `${Date.now()}-${messageId}-${index + 1}-${name}`);
-			if (!inPlace) await copyFile(attachment.path, localPath);
-			stored.push({
-				kind: attachmentKind(attachment.path),
-				name,
-				mimeType: attachment.mimeType || mimeTypeOf(attachment.path),
-				size: info.size,
-				originalPath: inPlace ? undefined : attachment.path,
-				localPath,
-			});
-		}
-		return stored;
+		return [`- [${record.timestamp}] [uid:${record.userId}] ${record.userName ?? "unknown"}: ${record.text || "(no text)"}`];
 	}
 }
 
@@ -345,37 +289,4 @@ function isAlive(pid: number): boolean {
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
-}
-
-function isInside(root: string, path: string): boolean {
-	const rel = relative(resolve(root), resolve(path));
-	return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/"));
-}
-
-function attachmentKind(path: string): AttachmentKind {
-	const ext = extname(path).toLowerCase();
-	if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)) return "image";
-	if ([".mp3", ".wav", ".ogg", ".m4a"].includes(ext)) return "audio";
-	if ([".mp4", ".mov", ".webm"].includes(ext)) return "video";
-	return "file";
-}
-
-const MIME_TYPES: Record<string, string> = {
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif": "image/gif",
-	".webp": "image/webp",
-	".mp3": "audio/mpeg",
-	".wav": "audio/wav",
-	".ogg": "audio/ogg",
-	".mp4": "video/mp4",
-	".json": "application/json",
-	".md": "text/markdown",
-	".txt": "text/plain",
-	".log": "text/plain",
-};
-
-function mimeTypeOf(path: string): string | undefined {
-	return MIME_TYPES[extname(path).toLowerCase()];
 }

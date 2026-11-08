@@ -11,9 +11,9 @@ licenses.
 - License: Apache-2.0. The pinned commit added `LICENSE` and set
   `package.json` to Apache-2.0; its README still says MIT, but the LICENSE file
   is the authoritative text.
-- Derived code: `src/gateway/conversation/store.ts` adapts the conversation log,
-  lock, and attachment handling from that commit's `src/runtime.ts` and
-  `src/log.ts`, and says so at the top of the file. The log record format in
+- Derived code: `src/gateway/conversation/store.ts` adapts the conversation log
+  and its lock from that commit's `src/runtime.ts` and `src/log.ts`, and says so
+  at the top of the file. The log record format in
   `src/gateway/conversation/records.ts` stays readable from logs that runtime
   wrote. Nothing else from pi-chat remains in this repository.
 

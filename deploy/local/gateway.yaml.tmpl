@@ -6,6 +6,9 @@
 # It uses kubectl-ate for the control plane. The SA may mint a token for the
 # shared ate-client ServiceAccount, which the development install makes the
 # bootstrap owner. A production install should grant a narrower role instead.
+#
+# GATEWAY_NAME names the Service, Deployment, and PVC, so a second gateway can
+# run beside the first; GATEWAY_EGRESS_CONFIGMAP holds the per-actor policy.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -73,7 +76,7 @@ roleRef:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-gateway-data
+  name: ${GATEWAY_NAME}-data
   namespace: ${GATEWAY_NAMESPACE}
 spec:
   accessModes: ["ReadWriteOnce"]
@@ -84,11 +87,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: pi-gateway
+  name: ${GATEWAY_NAME}
   namespace: ${GATEWAY_NAMESPACE}
 spec:
   selector:
-    app: pi-gateway
+    app: ${GATEWAY_NAME}
   ports:
   - name: http
     port: 8788
@@ -97,10 +100,10 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: pi-gateway
+  name: ${GATEWAY_NAME}
   namespace: ${GATEWAY_NAMESPACE}
   labels:
-    app: pi-gateway
+    app: ${GATEWAY_NAME}
 spec:
   replicas: 1
   # One conversation store, one Telegram long-poll. Recreate keeps the RWO
@@ -109,11 +112,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: pi-gateway
+      app: ${GATEWAY_NAME}
   template:
     metadata:
       labels:
-        app: pi-gateway
+        app: ${GATEWAY_NAME}
     spec:
       serviceAccountName: pi-gateway
       containers:
@@ -151,7 +154,7 @@ spec:
         - name: PI_TELEGRAM_TOKEN
           valueFrom:
             secretKeyRef:
-              name: pi-telegram
+              name: ${GATEWAY_TELEGRAM_SECRET}
               key: token
         volumeMounts:
         - name: router-client
@@ -176,7 +179,7 @@ spec:
               path: router-ca.pem
       - name: data
         persistentVolumeClaim:
-          claimName: pi-gateway-data
+          claimName: ${GATEWAY_NAME}-data
       - name: egress
         configMap:
-          name: pi-gateway-egress
+          name: ${GATEWAY_EGRESS_CONFIGMAP}

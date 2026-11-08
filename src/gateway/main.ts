@@ -17,9 +17,6 @@
  *   PI_HTTP_HOST           listen address (default 127.0.0.1)
  *   PI_GATEWAY_DATA_DIR    conversation storage root (default `/tmp/pi-gateway`)
  *   PI_ACTOR_URL           bridge WebSocket, usually the router's port-forward
- *   PI_INGRESS_MODE        router (default) or proxy; proxy starts
- *                          `kubectl-ate proxy actor` per conversation
- *   PI_ACTOR_PORT          actor port for proxy mode (default 80)
  *   PI_ROUTER_CA           CA bundle for a wss router (in-cluster gateway)
  *   PI_ROUTER_CERT         client certificate chain for the router
  *   PI_ROUTER_KEY          private key for PI_ROUTER_CERT
@@ -42,7 +39,6 @@ import { TelegramPoll } from "./channel/telegram-poll.js";
 import { KubectlAteControl } from "./substrate/kubectl.js";
 import { ActorProvisioner } from "./substrate/provisioner.js";
 
-const ingressMode = process.env.PI_INGRESS_MODE === "proxy" ? "proxy" : "router";
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 60);
 const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/e2e/egress-policy.yaml";
 const telegramToken = process.env.PI_TELEGRAM_TOKEN;
@@ -57,15 +53,6 @@ const routerTls = {
 	cert: process.env.PI_ROUTER_CERT,
 	key: process.env.PI_ROUTER_KEY,
 };
-const tunnel =
-	ingressMode === "proxy"
-		? {
-				binary: process.env.KUBECTL_ATE ?? "kubectl-ate",
-				context: process.env.KUBE_CONTEXT,
-				remotePort: Number(process.env.PI_ACTOR_PORT ?? 80),
-				log: (message: string) => console.error(`[substrate] ${message}`),
-			}
-		: undefined;
 
 const control = new KubectlAteControl({
 	binary: process.env.KUBECTL_ATE,
@@ -87,7 +74,6 @@ const manager = new GatewayManager({
 	dataDir: process.env.PI_GATEWAY_DATA_DIR ?? "/tmp/pi-gateway",
 	actorUrl: process.env.PI_ACTOR_URL ?? "ws://127.0.0.1:8000",
 	transportTls: routerTls.ca || routerTls.cert || routerTls.key ? routerTls : undefined,
-	tunnel,
 	actors,
 	// Telegram chats reply in place; every other conversation answers through
 	// POST /messages, which reads the conversation's turn recorder.

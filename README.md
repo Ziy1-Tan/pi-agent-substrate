@@ -35,7 +35,6 @@ message is the only thing that wakes it.
   settled reply in the response body.
 - Automatic suspend and resume with the session and `/workspace` intact.
 - One actor per conversation, so failures and context stay isolated.
-- Attachments land in `/workspace/incoming` and appear in the prompt.
 - Provider failures surface as errors, not empty replies.
 
 ## Quickstart
@@ -127,17 +126,15 @@ TELEGRAM_TOKEN=123:abc TELEGRAM_CHATS=42 KUBE_CONTEXT=kind-pi-v1 \
 Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
 an answer; empty answers any chat.
 
-To run the gateway on the workstation instead, use the same environment plus a
-router tunnel and `node dist/src/gateway/main.js`; see the configuration table.
-`deploy-local.sh` is the supported path.
+`deploy-local.sh` is the supported path. The gateway always reaches actors
+through atenet-router and needs the client certificate that only the
+in-cluster pod identity provides.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PI_ACTOR_URL` | `ws://127.0.0.1:8000` | Router WebSocket; unused in proxy mode |
-| `PI_INGRESS_MODE` | `router` | `router` dials `PI_ACTOR_URL`; `proxy` starts one `kubectl-ate proxy actor` per conversation |
-| `PI_ACTOR_PORT` | `80` | Bridge port for proxy mode |
+| `PI_ACTOR_URL` | `ws://127.0.0.1:8000` | Router WebSocket, usually `wss://` in the cluster |
 | `PI_ROUTER_CA` | unset | CA bundle for a `wss` router |
 | `PI_ROUTER_CERT` / `PI_ROUTER_KEY` | unset | Client credential for the router's mTLS ingress; may be the same projected bundle |
 | `PI_ATESPACE` | `pi-agents` | Atespace that holds the actors |

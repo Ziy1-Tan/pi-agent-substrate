@@ -52,6 +52,12 @@ EGRESS_POLICY="${EGRESS_POLICY:-deploy/e2e/egress-policy.yaml}"
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-gvisor}"
 SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLASS_NAME}")}"
 WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-pi-gateway}"
+SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE:-ate-system}"
+E2E_GATEWAY_NAME="${E2E_GATEWAY_NAME:-pi-gateway-e2e}"
+E2E_GATEWAY_EGRESS="${E2E_GATEWAY_EGRESS:-pi-gateway-e2e-egress}"
+E2E_GATEWAY_TELEGRAM="${E2E_GATEWAY_TELEGRAM:-pi-gateway-e2e-telegram}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-${REGISTRY}/pi-gateway:local}"
 ONLY="${ONLY:-}"
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
@@ -68,9 +74,15 @@ if [[ "${ONLY}" != "e2e" ]]; then
   echo "==> building the mock LLM image"
   docker build -t "${REGISTRY}/pi-mock-llm:dev" -f images/mock-llm/Dockerfile images/mock-llm
 
+  echo "==> building the gateway image"
+  mkdir -p bin
+  cp "$(command -v "${KUBECTL_ATE}")" bin/kubectl-ate
+  docker build -t "${GATEWAY_IMAGE}" -f images/gateway/Dockerfile .
+
   echo "==> pushing to ${REGISTRY}"
   docker push "${REGISTRY}/pi-actor:dev"
   docker push "${REGISTRY}/pi-mock-llm:dev"
+  docker push "${GATEWAY_IMAGE}"
 
   # A template must pin its image by digest: the server refuses a tag, because
   # a moved tag would silently invalidate existing snapshots.
@@ -180,9 +192,9 @@ if [[ "${ONLY}" != "e2e" ]]; then
 fi
 
 if [[ "${ONLY}" != "deploy" ]]; then
-  # v1.0.0's router only exposes mTLS listeners. The local e2e uses the
+  # v1.0.0's router only exposes mTLS listeners. The actor e2e uses the
   # kubectl-ate CONNECT proxy, which mints a client certificate and resumes
-  # the actor when the tunnel opens.
+  # the actor when the connection opens.
   echo "==> proxying ${ATESPACE}/${ACTOR} on 8000"
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} \
     proxy actor "${ACTOR}" -a "${ATESPACE}" 8000:80 >/tmp/pi-e2e-proxy.log 2>&1 &
@@ -198,11 +210,37 @@ if [[ "${ONLY}" != "deploy" ]]; then
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     node scripts/e2e/actor.js
 
+  echo "==> deploying the e2e gateway"
+  "${kube[@]}" create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | "${kube[@]}" apply -f -
+  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" create secret generic "${E2E_GATEWAY_TELEGRAM}" \
+    --from-literal=token= --dry-run=client -o yaml | "${kube[@]}" apply -f -
+  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap "${E2E_GATEWAY_EGRESS}" \
+    --from-file=egress-policy.yaml="${EGRESS_POLICY}" \
+    --dry-run=client -o yaml | "${kube[@]}" apply -f -
+  # Start from an empty store so the metrics counters describe this run.
+  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" delete deploy/"${E2E_GATEWAY_NAME}" svc/"${E2E_GATEWAY_NAME}" \
+    pvc/"${E2E_GATEWAY_NAME}-data" --ignore-not-found >/dev/null
+  GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" GATEWAY_NAME="${E2E_GATEWAY_NAME}" \
+    GATEWAY_EGRESS_CONFIGMAP="${E2E_GATEWAY_EGRESS}" GATEWAY_TELEGRAM_SECRET="${E2E_GATEWAY_TELEGRAM}" \
+    SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
+    GATEWAY_IMAGE="${GATEWAY_IMAGE}" ATESPACE="${ATESPACE}" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
+    IDLE_SECONDS="${IDLE_SECONDS}" TELEGRAM_CHATS='' \
+    envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${GATEWAY_TELEGRAM_SECRET} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS} ${TELEGRAM_CHATS}' \
+    < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
+  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status "deploy/${E2E_GATEWAY_NAME}" --timeout=180s
+  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" port-forward "svc/${E2E_GATEWAY_NAME}" "${HTTP_PORT}:8788" >/tmp/pi-e2e-gateway.log 2>&1 &
+  gateway_forward=$!
+  trap 'kill ${forward:-} ${gateway_forward:-} 2>/dev/null || true' EXIT
+
   echo "==> running the HTTP channel e2e"
   PI_ATESPACE="${ATESPACE}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
-    PI_ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
     PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_HTTP_PORT="${HTTP_PORT}" \
     PI_E2E_CONVERSATIONS="${CONVERSATIONS}" \
     node scripts/e2e/gateway.js
+
+  echo "==> removing the e2e gateway"
+  kill "${gateway_forward}" 2>/dev/null || true
+  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" delete deploy/"${E2E_GATEWAY_NAME}" svc/"${E2E_GATEWAY_NAME}" \
+    pvc/"${E2E_GATEWAY_NAME}-data" configmap/"${E2E_GATEWAY_EGRESS}" --ignore-not-found >/dev/null
 fi

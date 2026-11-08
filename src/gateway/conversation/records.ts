@@ -5,32 +5,12 @@
  * (`checkpoint`, `error`) nothing reads any more; both are ignored on read.
  */
 
-export type AttachmentKind = "image" | "file" | "audio" | "video";
-
-/** A file a channel has already saved, to be named in the prompt. */
-export interface AttachmentInput {
-	path: string;
-	name?: string;
-	mimeType?: string;
-}
-
-export interface StoredAttachment {
-	kind: AttachmentKind;
-	name: string;
-	mimeType?: string;
-	size?: number;
-	/** Where the file came from when it had to be copied in. */
-	originalPath?: string;
-	localPath: string;
-}
-
 /** One message from a channel, before it is recorded. */
 export interface InboundMessage {
 	messageId?: string;
 	userId: string;
 	userName?: string;
 	text: string;
-	attachments?: AttachmentInput[];
 }
 
 interface RecordBase {
@@ -44,7 +24,6 @@ export interface InboundRecord extends RecordBase {
 	userId: string;
 	userName?: string;
 	text: string;
-	attachments: StoredAttachment[];
 }
 
 export interface JobQueuedRecord extends RecordBase {

@@ -74,9 +74,9 @@ no `sandboxConfig`, no `snapshotConfig.storageLocation` (it needs the
 is selected by `workerSelector.matchLabels`, matched against the WorkerPool's
 labels; there is no template field for it. WorkerPools are `ate.dev/v1`.
 
-`kubectl ate delete actor` no longer accepts `--any-state`. The old
-The old install and cluster-creation scripts are gone; install
-Substrate with its own `ate-setup` command.
+`kubectl ate delete actor` no longer accepts `--any-state`. The old install and
+cluster-creation scripts are gone; install Substrate with its own `ate-setup`
+command.
 
 ## Templates
 
@@ -180,9 +180,10 @@ certificate chain second. Node rejects that file as `cert` with
 `PEM routines::no start line`; `src/gateway/websocket.ts` splits the blocks on
 every connect so a rotated credential is picked up.
 
-`kubectl ate proxy actor` is the workstation path. It mints a certificate for
-the `atenet-client` SA, so the router's allowlist needs that SPIFFE ID too.
-`PI_INGRESS_MODE=proxy` makes the gateway start one proxy per conversation.
+`kubectl ate proxy actor` remains the workstation path for one actor, and the
+actor e2e uses it. It mints a certificate for the `atenet-client` SA, so the
+router's allowlist needs that SPIFFE ID too. The gateway itself always uses
+the router.
 
 ## Local deployment
 

@@ -7,7 +7,6 @@ import { NullChannel } from "./null-channel.js";
 import { IdleLifecycle } from "./substrate/idle.js";
 import type { ActorRef } from "./substrate/control.js";
 import type { ActorProvisioner } from "./substrate/provisioner.js";
-import { ActorTunnels, type ActorTunnelOptions } from "./substrate/tunnel.js";
 import { Metrics } from "./metrics.js";
 import { WebSocketTransport, type WebSocketTlsOptions } from "./websocket.js";
 
@@ -23,12 +22,6 @@ export interface ManagerOptions {
 	actorUrl: string;
 	/** TLS settings for the router when actorUrl is wss. */
 	transportTls?: WebSocketTlsOptions;
-	/**
-	 * Supplying tunnel options enables proxy mode: one `kubectl-ate proxy
-	 * actor` per conversation, for a workstation without a router client
-	 * certificate.
-	 */
-	tunnel?: ActorTunnelOptions;
 	actors: ActorProvisioner;
 	metrics?: Metrics;
 	/** Replaces the actor backend; tests use it to run without a cluster. */
@@ -64,12 +57,10 @@ export class GatewayManager {
 	private readonly metrics: Metrics;
 	private readonly entries = new Map<string, ManagedConversation>();
 	private readonly opening = new Map<string, Promise<ManagedConversation>>();
-	private readonly tunnels: ActorTunnels | undefined;
 
 	constructor(options: ManagerOptions) {
 		this.options = options;
 		this.metrics = options.metrics ?? new Metrics();
-		this.tunnels = options.tunnel ? new ActorTunnels(options.tunnel) : undefined;
 	}
 
 	getMetrics(): Metrics {
@@ -110,7 +101,6 @@ export class GatewayManager {
 			await entry.gateway.stop().catch(() => undefined);
 			await entry.lifecycle.close().catch(() => undefined);
 		}
-		await this.tunnels?.close().catch(() => undefined);
 	}
 
 	private async open(spec: ConversationSpec): Promise<ManagedConversation> {
@@ -119,12 +109,9 @@ export class GatewayManager {
 		const actor = await this.options.actors.provision(spec.conversationId);
 
 		const outbound = this.options.createChannel?.(conversation);
-		const actorUrl = this.tunnels ? await this.tunnels.urlFor(actor) : this.options.actorUrl;
 		const transport = new WebSocketTransport({
-			url: actorUrl,
-			// A proxy tunnel names the actor in its CONNECT request; the router
-			// path still selects it on every upgrade.
-			targetActor: this.tunnels ? undefined : `${actor.atespace}/${actor.name}`,
+			url: this.options.actorUrl,
+			targetActor: `${actor.atespace}/${actor.name}`,
 			tls: this.options.transportTls,
 			log: (message) => log(`[${spec.conversationId}] ${message}`),
 		});

@@ -6,7 +6,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 
-import { saveUploads, type UploadInput } from "./files.js";
 import { GatewayManager, type ConversationSpec } from "../manager.js";
 import type { AgentResponse } from "../types.js";
 
@@ -68,15 +67,13 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 			typeof body.conversation === "string" && body.conversation ? body.conversation : "local/chat";
 		const text = typeof body.text === "string" ? body.text : "";
 		const messageId = typeof body.messageId === "string" ? body.messageId : randomUUID();
-		const uploads = Array.isArray(body.attachments) ? (body.attachments as UploadInput[]) : undefined;
-		if (text.trim().length === 0 && !uploads?.length) {
-			respond(response, 400, { error: "text or attachments required" });
+		if (text.trim().length === 0) {
+			respond(response, 400, { error: "text required" });
 			return;
 		}
 
-		let entry: Awaited<ReturnType<GatewayManager["ensure"]>>;
 		try {
-			entry = await options.manager.ensure(options.specFor(conversationId));
+			await options.manager.ensure(options.specFor(conversationId));
 		} catch (error) {
 			respond(response, 502, { error: `cannot open ${conversationId}: ${describe(error)}` });
 			return;
@@ -86,13 +83,11 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 		// conversation each get their own answer rather than the last to settle.
 		let reply: AgentResponse;
 		try {
-			const attachments = await saveUploads(entry.conversation.filesDir, messageId, uploads);
 			reply = await options.manager.receive(conversationId, {
 				userId: typeof body.userId === "string" ? body.userId : "curl",
 				userName: typeof body.userName === "string" ? body.userName : "curl",
 				text,
 				messageId,
-				attachments,
 			});
 		} catch (error) {
 			respond(response, 502, { error: describe(error), messageId });
@@ -122,7 +117,7 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 	};
 }
 
-/** Reads a request body with a hard cap, so a stray upload cannot exhaust memory. */
+/** Reads a request body with a hard cap, so an oversized request cannot exhaust memory. */
 function readBody(request: IncomingMessage): Promise<string> {
 	return new Promise((resolve, reject) => {
 		let size = 0;

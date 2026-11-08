@@ -83,6 +83,9 @@ IDLE_SECONDS="${IDLE_SECONDS:-60}"
 TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-${PI_TELEGRAM_TOKEN:-}}"
 TELEGRAM_CHATS="${TELEGRAM_CHATS:-${PI_TELEGRAM_CHATS:-}}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-pi-gateway}"
+GATEWAY_NAME="${GATEWAY_NAME:-pi-gateway}"
+GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP:-pi-gateway-egress}"
+GATEWAY_TELEGRAM_SECRET="${GATEWAY_TELEGRAM_SECRET:-pi-telegram}"
 SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE:-ate-system}"
 REGISTRY="${REGISTRY:-localhost:5001}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-${REGISTRY}/pi-gateway:local}"
@@ -313,20 +316,23 @@ fi
 
 echo "==> creating the gateway namespace and inputs"
 "${kube[@]}" create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | "${kube[@]}" apply -f -
-"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create secret generic pi-telegram \
+"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create secret generic "${GATEWAY_TELEGRAM_SECRET}" \
   --from-literal=token="${TELEGRAM_TOKEN}" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -
-"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap pi-gateway-egress \
+"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
   --from-file=egress-policy.yaml="${RENDERED_POLICY}" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -
 
 echo "==> applying the gateway"
-GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" GATEWAY_NAME="${GATEWAY_NAME}" \
+  GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP}" \
+  GATEWAY_TELEGRAM_SECRET="${GATEWAY_TELEGRAM_SECRET}" \
+  SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
   GATEWAY_IMAGE="${GATEWAY_IMAGE}" ATESPACE="${ATESPACE}" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
   IDLE_SECONDS="${IDLE_SECONDS}" TELEGRAM_CHATS="${TELEGRAM_CHATS}" \
-  envsubst '${GATEWAY_NAMESPACE} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS} ${TELEGRAM_CHATS}' \
+  envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${GATEWAY_TELEGRAM_SECRET} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS} ${TELEGRAM_CHATS}' \
   < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
-"${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status deploy/pi-gateway --timeout=180s
+"${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status "deploy/${GATEWAY_NAME}" --timeout=180s
 
 telegram_status=$([[ -n "${TELEGRAM_TOKEN}" ]] && echo enabled || echo disabled)
 
@@ -336,7 +342,7 @@ cat <<EOF
 
 Reach the gateway API from this machine:
 
-  kubectl --context ${KUBE_CONTEXT} -n ${GATEWAY_NAMESPACE} port-forward svc/pi-gateway 8788:8788 &
+  kubectl --context ${KUBE_CONTEXT} -n ${GATEWAY_NAMESPACE} port-forward svc/${GATEWAY_NAME} 8788:8788 &
   curl -s -X POST http://127.0.0.1:8788/messages \\
     -H 'content-type: application/json' \\
     -d '{"conversation":"${CONVERSATION}","text":"hello"}'

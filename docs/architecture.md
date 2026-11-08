@@ -42,7 +42,7 @@ it again.
 | State | Where | Why |
 |---|---|---|
 | Channel config, bot token, secrets | Gateway | Presence layer; must never enter a snapshot |
-| `channel.jsonl`, queue, attachments | Gateway | Recovery, replay, and rebuild depend on it |
+| `channel.jsonl`, queue | Gateway | Recovery, replay, and rebuild depend on it |
 | memory, skills, code, session files | Actor's `/workspace` | Cognition layer; moves with the snapshot |
 | Process memory, the running turn | Actor | A MEMORY snapshot restores a warm process |
 | Placement, snapshot references, identity | Substrate | Platform responsibility |
@@ -61,7 +61,7 @@ it again.
 
 The gateway is a standalone process that does not run the agent: channel
 adapters (`channel/`), the conversation store (`conversation/`: lock,
-`channel.jsonl`, attachments), the RPC relay (`backend.ts`, `websocket.ts`),
+`channel.jsonl`), the RPC relay (`backend.ts`, `websocket.ts`),
 and everything it asks of Substrate (`substrate/`: actor name from
 conversation id, create-if-absent, egress policy, idle suspension, and the
 control-plane client).
@@ -77,11 +77,9 @@ The Substrate core is not modified.
 
 ### Interface contracts
 
-Gateway to actor: a WebSocket carrying JSONL records. In router mode it dials
-atenet-router with a client certificate and selects the actor with the
-`ate-target-actor: <atespace>/<actor>` header. In proxy mode the gateway starts
-one `kubectl-ate proxy actor` per conversation and connects to its local
-listener, so the route comes from the tunnel. Commands: `prompt`, `get_state`,
+Gateway to actor: a WebSocket carrying JSONL records. It dials atenet-router
+with a client certificate and selects the actor with the
+`ate-target-actor: <atespace>/<actor>` header. Commands: `prompt`, `get_state`,
 `abort`, `clear_queue`, `new_session`. Events: `message_update`, `tool_call`,
 `agent_settled`, and Pi's other session events. Commands carry an `id` that
 responses echo; clients never depend on response ordering. The gateway must

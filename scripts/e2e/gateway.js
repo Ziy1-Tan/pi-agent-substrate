@@ -2,9 +2,9 @@
 /**
  * Clustered gateway e2e: the HTTP entry point against a real actor.
  *
- * The gateway runs locally in proxy mode, so the conversation-to-actor
- * mapping, the idle lifecycle, and the metrics are all the deployed code
- * paths.
+ * The gateway runs in the cluster, so the conversation-to-actor mapping, the
+ * idle lifecycle, the router ingress, and the metrics are all the deployed
+ * code paths. The shell script deploys it and forwards its port.
  *
  * A kind WorkerPool is small, so the two conversations are exercised in
  * sequence: the first one finishes and suspends before the second opens. The
@@ -17,24 +17,12 @@
  *      message resumes it; the resume latency lands in /metrics
  *   4. a second conversation gets a different actor and its own log
  */
-import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { actorNameFor, actorState as readActorState, ateClient, createChecks, removeActor, waitFor } from "./lib.js";
 
 const { atespace, ate } = ateClient();
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 12);
 const port = Number(process.env.PI_HTTP_PORT ?? 8899);
 const actorPrefix = process.env.PI_ACTOR_PREFIX ?? "pi-";
-/**
- * The template the gateway creates actors from. Without an explicit value the
- * gateway falls back to `pi-actor`, which is the manual template, not the one
- * the run just built; a leftover actor from an earlier run would then resume
- * against a snapshot its worker no longer holds.
- */
-const actorTemplate = process.env.PI_ACTOR_TEMPLATE ?? "pi-e2e";
 const conversations = (process.env.PI_E2E_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
 
 const log = (message) => console.log(`[gateway-e2e] ${message}`);
@@ -58,22 +46,6 @@ async function main() {
 	// run left so this run tests the template it was given; the same cleanup
 	// runs after the checks, so a passing run leaves nothing behind either.
 	for (const conversationId of conversations) await dropActor(actorNameFor(conversationId, actorPrefix));
-
-	const dataDir = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
-	const gateway = spawn(process.execPath, ["dist/src/gateway/main.js"], {
-		env: {
-			...process.env,
-			PI_GATEWAY_DATA_DIR: dataDir,
-			PI_HTTP_PORT: String(port),
-			PI_INGRESS_MODE: "proxy",
-			PI_ATESPACE: atespace,
-			PI_ACTOR_TEMPLATE: actorTemplate,
-			PI_IDLE_SECONDS: String(idleSeconds),
-		},
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	gateway.stdout.on("data", (chunk) => process.stdout.write(chunk));
-	gateway.stderr.on("data", (chunk) => process.stderr.write(chunk));
 
 	try {
 		await waitFor(
@@ -161,12 +133,10 @@ async function main() {
 		log(`resume latency p50=${metrics.timings?.resume_millis?.p50}ms p95=${metrics.timings?.resume_millis?.p95}ms`);
 		log(`turn latency p50=${metrics.timings?.turn_millis?.p50}ms p95=${metrics.timings?.turn_millis?.p95}ms`);
 	} finally {
-		gateway.kill("SIGTERM");
-		await new Promise((resolve) => gateway.once("exit", resolve));
-		// The gateway was this e2e's only suspend driver. Without a second
-		// worker slot, an actor left RUNNING here takes a slot from a real
-		// conversation and makes its next turn fail with a 503, so remove what
-		// this run created. Removing an actor also drops its egress policy.
+		// Without a second worker slot, an actor left RUNNING here takes a slot
+		// from a real conversation and makes its next turn fail with a 503, so
+		// remove what this run created. Removing an actor also drops its egress
+		// policy. The shell removes the gateway itself.
 		for (const conversationId of conversations) await dropActor(actorNameFor(conversationId, actorPrefix));
 	}
 

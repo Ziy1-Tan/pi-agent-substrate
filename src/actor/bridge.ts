@@ -24,8 +24,6 @@ export interface BridgeOptions {
 	piEnv?: NodeJS.ProcessEnv;
 	/** Port the bridge listens on inside the sandbox. */
 	port?: number;
-	/** Path answered with 200 for the ActorTemplate wakeupProbe. */
-	healthPath?: string;
 	log?: (message: string) => void;
 }
 
@@ -56,11 +54,8 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 	const activity = new PiActivity();
 	let currentRequestId: string | undefined;
 
-	const healthPath = options.healthPath ?? "/healthz";
-	// One port carries both the health probe and the RPC WebSocket: an actor
-	// template addresses a single container port for both.
 	const server: Server = createServer((request, response) => {
-		if (request.url === healthPath) {
+		if (request.url === "/healthz") {
 			response.writeHead(200, { "content-type": "text/plain" });
 			response.end("ok");
 			return;
@@ -91,11 +86,11 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 	const pi = new PiProcess({
 		command: options.piCommand ?? process.env.PI_BIN ?? "pi",
 		args: piArgs,
-		cwd: process.env.PI_BRIDGE_CWD || process.cwd(),
+		cwd: process.cwd(),
 		env: { ...process.env, ...options.piEnv },
 		onStderr: (line) => log(`pi stderr: ${line}`),
 		// A new child has no in-memory stream state.
-		onStart: () => activity.resetStream(),
+		onStart: () => activity.beginTurn(),
 		onEvent: (event) => {
 			activity.observe(event);
 			// The authoritative result goes out before Pi's own event: the
@@ -138,15 +133,6 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 
 	wss.on("connection", (socket: WebSocket, request: IncomingMessage) => {
 		log(`client connected from ${request.socket.remoteAddress ?? "?"}`);
-		socket.send(
-			JSON.stringify({
-				type: "bridge_hello",
-				pid: pi.pid,
-				streaming: activity.streaming,
-				currentRequestId,
-			}),
-		);
-
 		if (!pi.ready) startPi();
 		socket.on("message", (data: Buffer) => {
 			const parsed = parseRecord(String(data).trim());

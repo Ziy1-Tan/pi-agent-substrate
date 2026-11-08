@@ -95,23 +95,15 @@ export class PiProcess {
 
 /** Tracks one turn's stream so its settled outcome can be reported. */
 export class PiActivity {
-	streaming = false;
 	text = "";
 	private lastAssistantText: string | undefined;
 	/** Set when the turn ended in a provider error rather than a reply. */
 	private failure: string | undefined;
 
 	beginTurn(): void {
-		this.streaming = true;
 		this.text = "";
 		this.lastAssistantText = undefined;
 		this.failure = undefined;
-	}
-
-	/** Drops stream state after a child restart, keeping session metadata. */
-	resetStream(): void {
-		this.beginTurn();
-		this.streaming = false;
 	}
 
 	observe(event: unknown): void {
@@ -125,7 +117,6 @@ export class PiActivity {
 		}
 		const exhausted = retryFailure(event);
 		if (exhausted !== undefined) this.failure = exhausted;
-		if (isAgentSettled(event)) this.streaming = false;
 	}
 
 	/** The turn's outcome once `agent_settled` arrives; undefined before that. */

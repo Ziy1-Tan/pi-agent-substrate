@@ -27,7 +27,7 @@ const MAX_BODY_BYTES = 1024 * 1024;
 
 export async function startHttpServer(options: HttpServerOptions): Promise<HttpServer> {
 	const log = options.log ?? ((message: string) => console.error(`[http] ${message}`));
-	const port = options.port ?? Number(process.env.PI_HTTP_PORT ?? 8788);
+	const port = options.port ?? 8788;
 
 	const server: Server = createServer((request, response) => {
 		void route(request, response);

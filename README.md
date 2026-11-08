@@ -122,17 +122,13 @@ in-cluster pod identity provides.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PI_ACTOR_URL` | `ws://127.0.0.1:8000` | Router WebSocket, usually `wss://` in the cluster |
+| `PI_ACTOR_URL` | required | Router WebSocket, `wss://` in the cluster |
 | `PI_ROUTER_CA` | unset | CA bundle for a `wss` router |
 | `PI_ROUTER_CERT` / `PI_ROUTER_KEY` | unset | Client credential for the router's mTLS ingress; may be the same projected bundle |
 | `PI_ATESPACE` | `pi-agents` | Atespace that holds the actors |
 | `PI_ACTOR_TEMPLATE` | `pi-actor` | Template used to create a missing actor |
 | `PI_EGRESS_POLICY` | `deploy/e2e/egress-policy.yaml` | Applied to each new actor |
 | `PI_IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
-| `PI_HTTP_PORT` | `8788` | HTTP port |
-| `PI_HTTP_HOST` | `127.0.0.1` | Listen address |
-| `KUBECTL_ATE` / `KUBE_CONTEXT` | from `PATH` | Control plane access |
-| `PI_KUBECTL_ATE_TOKEN_FILE` | unset | Bearer token for ate-api; in-cluster pods point it at their ServiceAccount token |
 
 ## How it works
 

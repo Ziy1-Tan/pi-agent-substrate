@@ -6,34 +6,18 @@ import type { ActorControl, ActorRef, ActorState } from "./control.js";
 const run = promisify(execFile);
 
 export interface KubectlAteControlOptions {
-	/** Binary name or path. Defaults to `kubectl-ate` on PATH. */
-	binary?: string;
-	/** `--context` passed to every call. */
-	context?: string;
 	/** Template `ensure` creates a missing actor from. */
 	template: string;
-	/** `--token-file` passed through for non-local clusters. */
-	tokenFile?: string;
 	log?: (message: string) => void;
 }
 
-/**
- * ActorControl over the `kubectl-ate` CLI. The CLI already knows how to
- * port-forward ateapi and mint a ServiceAccount token, so this works both on a
- * workstation and from inside a pod that has the same kubeconfig surface.
- */
+/** ActorControl over the `kubectl-ate` that the gateway image carries. */
 export class KubectlAteControl implements ActorControl {
-	private readonly binary: string;
-	private readonly context: string | undefined;
 	private readonly template: string;
-	private readonly tokenFile: string | undefined;
 	private readonly log: (message: string) => void;
 
 	constructor(options: KubectlAteControlOptions) {
-		this.binary = options.binary ?? "kubectl-ate";
-		this.context = options.context;
 		this.template = options.template;
-		this.tokenFile = options.tokenFile;
 		this.log = options.log ?? (() => undefined);
 	}
 
@@ -89,13 +73,7 @@ export class KubectlAteControl implements ActorControl {
 	}
 
 	private async call(args: string[]): Promise<string> {
-		const command = [
-			this.binary,
-			...(this.context ? ["--context", this.context] : []),
-			...(this.tokenFile ? ["--token-file", this.tokenFile] : []),
-			...args,
-		];
-		const { stdout } = await run(command[0] ?? this.binary, command.slice(1), { maxBuffer: 16 * 1024 * 1024 });
+		const { stdout } = await run("kubectl-ate", args, { maxBuffer: 16 * 1024 * 1024 });
 		return stdout;
 	}
 }

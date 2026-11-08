@@ -11,20 +11,15 @@
  *
  * Configuration is environment only:
  *
- *   PI_HTTP_PORT           HTTP port (default 8788)
- *   PI_HTTP_HOST           listen address (default 127.0.0.1)
- *   PI_ACTOR_URL           bridge WebSocket, usually the router's port-forward
+ *   PI_ACTOR_URL           bridge WebSocket (required)
  *   PI_ROUTER_CA           CA bundle for a wss router (in-cluster gateway)
  *   PI_ROUTER_CERT         client certificate chain for the router
  *   PI_ROUTER_KEY          private key for PI_ROUTER_CERT
+ *   PI_ATESPACE            atespace that holds the actors
  *   PI_ACTOR_TEMPLATE      template used to create a missing actor
  *   PI_EGRESS_POLICY       manifest applied to each new actor (default
  *                          `deploy/e2e/egress-policy.yaml`; empty disables it)
  *   PI_IDLE_SECONDS        idle window before suspend (0 disables, default 60)
- *   KUBECTL_ATE            kubectl-ate binary (default on PATH)
- *   PI_KUBECTL_ATE_TOKEN_FILE  bearer token for ate-api; an in-cluster pod
- *                          points this at its own ServiceAccount token
- *   KUBE_CONTEXT           kubectl context
  */
 import { GatewayManager, type ConversationSpec } from "./manager.js";
 import { startHttpServer } from "./channel/server.js";
@@ -40,11 +35,11 @@ const routerTls = {
 	key: process.env.PI_ROUTER_KEY,
 };
 
+const actorUrl = process.env.PI_ACTOR_URL;
+if (!actorUrl) throw new Error("PI_ACTOR_URL is required");
+
 const control = new KubectlAteControl({
-	binary: process.env.KUBECTL_ATE,
-	context: process.env.KUBE_CONTEXT,
 	template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
-	tokenFile: process.env.PI_KUBECTL_ATE_TOKEN_FILE,
 	log: (message) => console.error(`[substrate] ${message}`),
 });
 
@@ -57,7 +52,7 @@ const actors = new ActorProvisioner({
 });
 
 const manager = new GatewayManager({
-	actorUrl: process.env.PI_ACTOR_URL ?? "ws://127.0.0.1:8000",
+	actorUrl,
 	transportTls: routerTls.ca || routerTls.cert || routerTls.key ? routerTls : undefined,
 	actors,
 	log: (message) => console.error(`[gateway] ${message}`),
@@ -70,8 +65,8 @@ const specFor = (conversationId: string): ConversationSpec => ({
 
 const server = await startHttpServer({
 	manager,
-	port: Number(process.env.PI_HTTP_PORT ?? 8788),
-	host: process.env.PI_HTTP_HOST ?? "127.0.0.1",
+	port: 8788,
+	host: "0.0.0.0",
 	specFor,
 	log: (message) => console.error(`[http] ${message}`),
 });

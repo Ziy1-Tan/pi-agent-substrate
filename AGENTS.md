@@ -142,11 +142,10 @@ curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
 
 Connecting to the bridge wakes the actor, so a transport must never reconnect
 on its own: one suspend becomes a permanent wake loop. The next turn's
-`connect()` is the only wake signal, and a disconnect invalidates the
-settled-result cache those restored actors can no longer see. `turnStarted()`
-increments an in-flight count that only `turnSettled()` decrements; a failure
-that skips the settle blocks every later settle and pins a worker forever, so
-the gateway settles in `finally`.
+`connect()` is the only wake signal. `turnStarted()` increments an in-flight
+count that only `turnSettled()` decrements; a failure that skips the settle
+blocks every later settle and pins a worker forever, so the gateway settles in
+`finally`.
 
 ## Reporting failures
 
@@ -179,11 +178,6 @@ The projected credential bundle is one PEM with the private key first and the
 certificate chain second. Node rejects that file as `cert` with
 `PEM routines::no start line`; `src/gateway/websocket.ts` splits the blocks on
 every connect so a rotated credential is picked up.
-
-`kubectl ate proxy actor` remains the workstation path for one actor, and the
-actor e2e uses it. It mints a certificate for the `atenet-client` SA, so the
-router's allowlist needs that SPIFFE ID too. The gateway itself always uses
-the router.
 
 ## Local deployment
 

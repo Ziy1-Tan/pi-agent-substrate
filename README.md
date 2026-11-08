@@ -7,10 +7,10 @@ sleep by itself. The chat connection stays up while the thinking happens in a
 sandbox that costs nothing when idle.
 
 ```text
-Telegram / curl
+curl POST /messages
         │
         ▼
-   gateway (always on)          ← chat presence, conversation log, idle policy
+   gateway (always on)          ← HTTP entry, idle policy
         │
         ▼
    Substrate actor (sleeps)     ← pi --mode rpc, /workspace, session files
@@ -23,16 +23,14 @@ Telegram / curl
 
 An agent is idle most of the time. A resident process wastes the machine;
 killing it loses the conversation. Here each conversation maps to its own
-suspendable actor: the gateway stays up to hold the chat connection, and the
+suspendable actor: the gateway stays up to answer HTTP requests, and the
 actor sleeps between turns with its files and Pi session intact. Sending a
 message is the only thing that wakes it.
 
 ## What you get
 
-- Two entry points over one conversation model: Telegram and `curl` address
-  the same `account/channel` id.
-- Streaming replies: Telegram edits one message in place; `curl` gets the
-  settled reply in the response body.
+- One HTTP entry point: `POST /messages` with a conversation id and text, and
+  the settled reply in the response.
 - Automatic suspend and resume with the session and `/workspace` intact.
 - One actor per conversation, so failures and context stay isolated.
 - Provider failures surface as errors, not empty replies.
@@ -53,11 +51,10 @@ export ATE_INSTALL_KIND=true
 go run ./cmd/ate-setup deploy ate-system \
   --kind --context kind-pi-v1 \
   --credential-provider='{"name":"k8s.io"}' \
-  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway,spiffe://cluster.local/ns/ate-system/sa/atenet-client
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway
 ```
 
-The first ID lets the in-cluster gateway reach actors through atenet-router;
-the second lets `kubectl ate proxy actor` do the same from the workstation.
+The ID lets the in-cluster gateway reach actors through atenet-router.
 `sandbox.microvm` needs a node that advertises `ate.dev/kvm`. On a host
 without nested virtualization, add `--sandbox-classes=gvisor`.
 
@@ -112,19 +109,10 @@ kubectl -n pi-gateway port-forward svc/pi-gateway 8788:8788 &
 curl -s localhost:8788/messages \
   -H 'content-type: application/json' \
   -d '{"conversation":"local/chat","text":"say hello"}'
-# {"conversation":"local/chat","messageId":"...","text":"..."}
+# {"conversation":"local/chat","text":"..."}
 ```
 
-Telegram is configured at deploy time; the token goes into a Secret, never
-into the actor:
-
-```sh
-TELEGRAM_TOKEN=123:abc TELEGRAM_CHATS=42 KUBE_CONTEXT=kind-pi-v1 \
-  ./scripts/deploy-local.sh
-```
-
-Each chat becomes `telegram/<chat id>`. `PI_TELEGRAM_CHATS` restricts who gets
-an answer; empty answers any chat.
+`GET /metrics` returns counters for turns, suspends, and resumed turns.
 
 `deploy-local.sh` is the supported path. The gateway always reaches actors
 through atenet-router and needs the client certificate that only the
@@ -143,9 +131,6 @@ in-cluster pod identity provides.
 | `PI_IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
 | `PI_HTTP_PORT` | `8788` | HTTP port |
 | `PI_HTTP_HOST` | `127.0.0.1` | Listen address |
-| `PI_GATEWAY_DATA_DIR` | `/tmp/pi-gateway` | Conversation logs and workspace |
-| `PI_TELEGRAM_TOKEN` | unset | Enables the Telegram entry point |
-| `PI_TELEGRAM_CHATS` | any | Comma-separated chat ids to answer |
 | `KUBECTL_ATE` / `KUBE_CONTEXT` | from `PATH` | Control plane access |
 | `PI_KUBECTL_ATE_TOKEN_FILE` | unset | Bearer token for ate-api; in-cluster pods point it at their ServiceAccount token |
 
@@ -153,7 +138,7 @@ in-cluster pod identity provides.
 
 The gateway and the actor are separate processes that talk over a WebSocket.
 The actor runs a bridge exposing `pi --mode rpc` as JSONL records; the gateway
-owns the conversation log, the queue, and the idle timer.
+relays one turn per request and owns the idle timer.
 
 ```text
 IDLE ──prompt──> ACTIVE ──settled──> GRACE ──idle──> SUSPENDING ──> SUSPENDED

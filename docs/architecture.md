@@ -1,8 +1,8 @@
 # Always-on Pi agents on Agent Substrate
 
-Combine a conversation log derived from pi-chat's, always-on-agent's idle
-suspension policy, and Substrate's suspendable actors to run `pi --mode rpc`
-inside an actor: a Pi agent that stays connected but only computes on demand.
+Combine always-on-agent's idle suspension policy with Substrate's suspendable
+actors to run `pi --mode rpc` inside an actor: a Pi agent that stays reachable
+but only computes on demand.
 
 ## Problem
 
@@ -22,34 +22,33 @@ and re-align state.
 
 | Layer | Role | Source |
 |---|---|---|
-| Channel | Where the human speaks | The curl and Telegram adapters in `src/gateway/channel/` |
-| Gateway | Conversation log, delivery, and lifecycle decisions | The log derives from pi-chat's runtime; `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
+| Channel | Where the human speaks | The HTTP adapter in `src/gateway/channel/` |
+| Gateway | Turn relay and lifecycle decisions | `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
 | Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
 
 Presence and cognition are separate concerns. The resident gateway is an
-ordinary process, not an actor and not in a WorkerPool; it holds the channel
-connections, the conversation mapping, and the chat log. The local deployment
-runs it as a Deployment in the cluster next to the workers, with its data on a
-PVC. Each conversation has its own actor, which runs `pi --mode rpc` and holds
-`/workspace`, the session files, and the process state. A message is forwarded
-to the actor, which the router resumes if it was suspended; after
-`agent_settled` and an idle window with no work in flight, the gateway suspends
-it again.
+ordinary process, not an actor and not in a WorkerPool; it answers HTTP
+requests and maps a conversation id to an actor. The local deployment runs it
+as a Deployment in the cluster next to the workers. Each conversation has its
+own actor, which runs `pi --mode rpc` and holds `/workspace`, the session
+files, and the process state. A message is forwarded to the actor, which the
+router resumes if it was suspended; after `agent_settled` and an idle window
+with no work in flight, the gateway suspends it again.
 
 ### State ownership
 
 | State | Where | Why |
 |---|---|---|
-| Channel config, bot token, secrets | Gateway | Presence layer; must never enter a snapshot |
-| `channel.jsonl`, queue | Gateway | Recovery, replay, and rebuild depend on it |
+| Provider secret | Kubernetes Secret | Injected on egress; must never enter a snapshot |
+| Turn in flight | Gateway memory | The reply is the HTTP response; nothing outlives the request |
 | memory, skills, code, session files | Actor's `/workspace` | Cognition layer; moves with the snapshot |
 | Process memory, the running turn | Actor | A MEMORY snapshot restores a warm process |
 | Placement, snapshot references, identity | Substrate | Platform responsibility |
 
 ### Goals
 
-1. A channel message resumes a suspended actor and streams a reply.
+1. An HTTP message resumes a suspended actor and returns its reply.
 2. After a turn and the idle window, the actor suspends and releases its worker.
 3. A message hours later continues the conversation with context and workspace
    intact.
@@ -59,12 +58,11 @@ it again.
 
 ## Components
 
-The gateway is a standalone process that does not run the agent: channel
-adapters (`channel/`), the conversation store (`conversation/`: lock,
-`channel.jsonl`), the RPC relay (`backend.ts`, `websocket.ts`),
-and everything it asks of Substrate (`substrate/`: actor name from
-conversation id, create-if-absent, egress policy, idle suspension, and the
-control-plane client).
+The gateway is a standalone process that does not run the agent: the HTTP
+channel (`channel/`), the RPC relay (`backend.ts`, `websocket.ts`), and
+everything it asks of Substrate (`substrate/`: actor name from conversation
+id, create-if-absent, egress policy, idle suspension, and the control-plane
+client).
 
 The actor image is a WebSocket-to-stdio bridge in front of
 `pi --mode rpc --session-dir /workspace/.pi`, on a pinned Node base image, with
@@ -85,41 +83,29 @@ with a client certificate and selects the actor with the
 responses echo; clients never depend on response ordering. The gateway must
 keep reading so a slow socket cannot block the actor's stdout.
 
-The bridge adds two extensions:
-
-- `bridge_result` carries the `requestId` when a turn settles. Pi's own
-  `agent_settled` does not identify the turn, so this is what the gateway
-  settles on. It is sent before `agent_settled`, because the gateway settles on
-  the first record it sees and a bare `agent_settled` would turn a provider
-  failure into an empty reply.
-- `bridge_get_state` and a `bridge_result` lookup let a reconnected client ask
-  the bridge for a turn that settled while it was away, instead of resending
-  the prompt.
+The bridge adds one extension: `bridge_result` carries the `requestId` when a
+turn settles. Pi's own `agent_settled` does not identify the turn, so this is
+what the gateway settles on. It is sent before `agent_settled`, because the
+gateway settles on the first record it sees and a bare `agent_settled` would
+turn a provider failure into an empty reply.
 
 Gateway to control plane: the ateapi over podcert mTLS or ServiceAccount
 identity in production, the `kubectl-ate` subprocess locally. Operations:
-CreateActor, ResumeActor, SuspendActor, GetActor.
+CreateActor, SuspendActor, GetActor. Resume is not a call: the router wakes the
+actor when the next turn connects.
 
-Client to gateway: channel clients through their own adapters; curl through
-the gateway's HTTP API, which relays prompts and replies and never touches an
+Client to gateway: `POST /messages` with a conversation id and text. The
+gateway relays the prompt and the reply and never lets the caller touch an
 actor directly.
 
-### Delivery state machine
+### Turn handling
 
-Every turn is a job. The runtime appends `inbound -> job_queued ->
-job_dispatched -> outbound -> job_completed` to `channel.jsonl`.
-`job_dispatched` stores a request id stable for the job; the backend is
-idempotent per request id and the channel per delivery id. On start the gateway
-recovers jobs without a terminal record by position in the log:
-
-| Crash point | State | Recovery |
-|---|---|---|
-| Before submit | `job_queued` | Submit again with the job id as the request id |
-| After submit, before the response | `job_dispatched` | Retry the same request id; the backend returns the same turn |
-| After the channel send, before `outbound` | `job_dispatched` | Retry the cached turn; the channel suppresses the duplicate delivery id |
-| After `outbound`, before `job_completed` | `outbound` | Append the completion only |
-
-The recovery path never replays a completed turn.
+A turn is one HTTP request. The gateway serializes turns within a
+conversation, connects to the actor (which the router resumes), sends one
+prompt, and returns the `bridge_result` text in the response. Nothing is
+written to disk on the gateway side: if the gateway or the connection dies
+mid-turn, that request fails and the caller retries. The actor's session file
+is what carries the conversation forward, not a gateway queue.
 
 ### Lifecycle state machine
 
@@ -145,35 +131,26 @@ ACTIVE/GRACE --actor crash--> CRASHED (requires revert or recreate)
 - An actor crash does not retry the turn. Session files stay; revert is the
   user's or the policy's decision.
 
-Connecting wakes the actor, so the transport must not reconnect on its own: a reconnect after a suspend would wake the actor immediately and
-produce a suspend/wake loop. The next turn's `connect()` is the only wake
-action, and a disconnect clears the settled-result cache, since those results
-lived in the bridge process the suspend removed.
+Connecting wakes the actor, so the transport must not reconnect on its own: a
+reconnect after a suspend would wake the actor immediately and produce a
+suspend/wake loop. The next turn's `connect()` is the only wake action.
 
 ### Conversation mapping
 
 One conversation maps to one actor, named deterministically from the
 conversation id (a legal Kubernetes name with a fixed `pi-` prefix). A missing
 actor is created from the golden template; templates are immutable, so a change
-needs a new name. Each conversation has its own actor, log, and lock.
+needs a new name. Each conversation has its own actor.
 
 ### Snapshot policy
 
 MEMORY (the default) captures process memory, rootfs changes, and durable data,
-so a restore yields a warm process and a reconnecting client only needs
-`get_state`. DATA plus session files is smaller and survives runtime changes,
-but restores cold and must continue via `--session-id` or `--continue`. Either way the session files under `/workspace` must stay
+so a restore yields a warm process. DATA plus session files is smaller and
+survives runtime changes, but restores cold and must continue via `--session-id`
+or `--continue`. Either way the session files under `/workspace` must stay
 readable, and the gateway never depends on memory captured in a snapshot. Since
 the Pi child may be dead after a restore, the bridge starts it lazily and
 restarts it on the same `--session-id` when a client connects.
-
-### Reconnect and idempotence
-
-The gateway assigns a request id per turn; a retry with the same id returns the
-existing result. Disconnected clients get buffered events, then `get_state` and
-the history before the live stream resumes. A suspend-caused disconnect does
-not replay the last turn; the session file is the source of truth. The RPC
-client has no built-in reconnect.
 
 ### Error propagation
 
@@ -181,7 +158,7 @@ A failure must be distinguishable from an empty reply, or the user sees
 silence. Pi reports a provider failure through the final assistant message
 (`stopReason: "error"` with `errorMessage`) and an exhausted retry through
 `auto_retry_end` with `success: false` and `finalError`. The bridge folds both
-into `bridge_result`, the backend puts them in `AgentResponse.error`, the
-gateway records `job_failed`, and the channel's `sendError` delivers the
-reason. Gateway failures such as a failed submit or a dropped transport take
-the same path and settle the lifecycle on the way out.
+into `bridge_result`, the backend puts them in `AgentResponse.error`, and the
+HTTP entry point answers with a 502 and the reason. Gateway failures such as a
+failed connect or a dropped transport take the same path and settle the
+lifecycle on the way out.

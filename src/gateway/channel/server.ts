@@ -4,7 +4,6 @@
  * manager call and the settled reply into JSON.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
 
 import { GatewayManager, type ConversationSpec } from "../manager.js";
 import type { AgentResponse } from "../types.js";
@@ -24,7 +23,7 @@ export interface HttpServer {
 	close(): Promise<void>;
 }
 
-const MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 
 export async function startHttpServer(options: HttpServerOptions): Promise<HttpServer> {
 	const log = options.log ?? ((message: string) => console.error(`[http] ${message}`));
@@ -66,16 +65,8 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 		const conversationId =
 			typeof body.conversation === "string" && body.conversation ? body.conversation : "local/chat";
 		const text = typeof body.text === "string" ? body.text : "";
-		const messageId = typeof body.messageId === "string" ? body.messageId : randomUUID();
 		if (text.trim().length === 0) {
 			respond(response, 400, { error: "text required" });
-			return;
-		}
-
-		try {
-			await options.manager.ensure(options.specFor(conversationId));
-		} catch (error) {
-			respond(response, 502, { error: `cannot open ${conversationId}: ${describe(error)}` });
 			return;
 		}
 
@@ -83,21 +74,16 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 		// conversation each get their own answer rather than the last to settle.
 		let reply: AgentResponse;
 		try {
-			reply = await options.manager.receive(conversationId, {
-				userId: typeof body.userId === "string" ? body.userId : "curl",
-				userName: typeof body.userName === "string" ? body.userName : "curl",
-				text,
-				messageId,
-			});
+			reply = await options.manager.receive(options.specFor(conversationId), text);
 		} catch (error) {
-			respond(response, 502, { error: describe(error), messageId });
+			respond(response, 502, { error: describe(error) });
 			return;
 		}
 		if (reply.error !== undefined) {
-			respond(response, 502, { error: reply.error, messageId });
+			respond(response, 502, { error: reply.error });
 			return;
 		}
-		respond(response, 200, { conversation: conversationId, messageId, text: reply.text });
+		respond(response, 200, { conversation: conversationId, text: reply.text });
 	}
 
 	server.listen(port, options.host ?? "127.0.0.1");

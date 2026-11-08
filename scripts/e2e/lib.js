@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Shared helpers for the clustered e2e scripts. Both drive `kubectl-ate` and
- * the same small WorkerPool, so cleanup and actor inspection are identical.
+ * Helpers for the clustered gateway e2e: `kubectl-ate` calls, actor cleanup,
+ * polling, and named checks.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

@@ -1,15 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { createConversation } from "../src/gateway/conversation/store.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { IdleLifecycle } from "../src/gateway/substrate/idle.js";
 import type { ActorControl, ActorRef, ActorState, LifecycleClock } from "../src/gateway/substrate/control.js";
-import { TestChannel } from "./support/test-channel.js";
 
 class ManualClock implements LifecycleClock {
 	private time = 0;
@@ -55,28 +50,25 @@ class RecordingControl implements ActorControl {
 	}
 }
 
-test("the gateway suspends after the idle window and wakes for the next turn", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-	const conversation = await createConversation(root);
-	const channel = new TestChannel();
+function setup(idleMs: number, backend = new StubBackend()) {
 	const clock = new ManualClock();
 	const control = new RecordingControl();
 	const lifecycle = new IdleLifecycle({
-		actor: { atespace: "pi-agents", name: "pi-conv-1" },
+		actor: { atespace: "pi-agents", name: "pi-conv" },
 		control,
-		idleMs: 1_000,
+		idleMs,
 		clock,
 	});
-	const gateway = new Gateway({ conversation, channel, backend: new StubBackend(), lifecycle });
-	await gateway.start();
-	t.after(async () => {
-		await gateway.stop();
-		await lifecycle.close();
-		await rm(root, { recursive: true, force: true });
-	});
+	const gateway = new Gateway({ backend, lifecycle });
+	return { clock, control, lifecycle, gateway, backend };
+}
 
-	await gateway.receive({ userId: "u", userName: "alice", text: "hello" });
-	await gateway.waitForIdle();
+test("the gateway suspends after the idle window and wakes for the next turn", async (t) => {
+	const { clock, control, lifecycle, gateway } = setup(1_000);
+	t.after(() => lifecycle.close());
+
+	const first = await gateway.receive("hello");
+	assert.equal(first.text, "Reply: hello");
 	assert.equal(control.suspends, 0, "no suspend while or right after a turn");
 	assert.equal(lifecycle.state, "GRACE");
 
@@ -84,45 +76,22 @@ test("the gateway suspends after the idle window and wakes for the next turn", a
 	assert.equal(control.suspends, 1);
 	assert.equal(lifecycle.state, "SUSPENDED");
 
-	await gateway.receive({ userId: "u", userName: "alice", text: "again" });
-	await gateway.waitForIdle();
-	assert.equal(channel.sent.length, 2);
-	assert.equal(channel.sent[1]?.text, "Reply: again");
+	const second = await gateway.receive("again");
+	assert.equal(second.text, "Reply: again");
 	assert.equal(lifecycle.state, "GRACE", "the resumed turn settles into a fresh grace window");
 });
 
 test("a turn in flight is never suspended", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-	const conversation = await createConversation(root);
-	const clock = new ManualClock();
-	const control = new RecordingControl();
-	const lifecycle = new IdleLifecycle({
-		actor: { atespace: "pi-agents", name: "pi-conv-2" },
-		control,
-		idleMs: 100,
-		clock,
-	});
-	const gateway = new Gateway({
-		conversation,
-		channel: new TestChannel(),
-		backend: new StubBackend({ delayMs: 1_000 }),
-		lifecycle,
-	});
-	await gateway.start();
-	t.after(async () => {
-		await gateway.stop();
-		await lifecycle.close();
-		await rm(root, { recursive: true, force: true });
-	});
+	const { clock, control, lifecycle, gateway } = setup(100, new StubBackend({ delayMs: 1_000 }));
+	t.after(() => lifecycle.close());
 
-	const turn = gateway.receive({ userId: "u", userName: "alice", text: "slow" });
+	const turn = gateway.receive("slow");
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	assert.equal(lifecycle.state, "ACTIVE");
 	await clock.advance(60_000);
 	assert.equal(control.suspends, 0, "the idle window cannot expire mid-turn");
 
 	await turn;
-	await gateway.waitForIdle();
 	assert.equal(lifecycle.state, "GRACE");
 });
 
@@ -130,41 +99,16 @@ test("a failed turn still ends, so the idle window can arm", async (t) => {
 	// A provider outage fails the turn after `turnStarted`. If the lifecycle
 	// never hears the matching settle, it stays ACTIVE and the actor is never
 	// suspended again: one transient error would pin a worker forever.
-	const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-	const conversation = await createConversation(root);
-	const channel = new TestChannel();
-	const clock = new ManualClock();
-	const control = new RecordingControl();
-	const lifecycle = new IdleLifecycle({
-		actor: { atespace: "pi-agents", name: "pi-conv-3" },
-		control,
-		idleMs: 1_000,
-		clock,
-	});
 	const backend = new StubBackend();
-	const original = backend.submit.bind(backend);
 	backend.submit = async () => {
 		throw new Error("provider unreachable");
 	};
-	const gateway = new Gateway({ conversation, channel, backend, lifecycle });
-	await gateway.start();
-	t.after(async () => {
-		await gateway.stop();
-		await lifecycle.close();
-		await rm(root, { recursive: true, force: true });
-	});
+	const { clock, control, lifecycle, gateway } = setup(1_000, backend);
+	t.after(() => lifecycle.close());
 
-	await gateway.receive({ userId: "u", userName: "alice", text: "does not matter" });
-	await gateway.waitForIdle();
+	await assert.rejects(gateway.receive("does not matter"), /provider unreachable/);
 	assert.equal(lifecycle.state, "GRACE", "a failed turn leaves the state machine able to suspend");
-	assert.equal(channel.errors.at(-1), "provider unreachable", "the failure reaches the user");
 
 	await clock.advance(1_000);
 	assert.equal(control.suspends, 1, "the actor still goes idle after a failed turn");
-
-	// And the conversation recovers: the next turn uses the real backend.
-	backend.submit = original;
-	await gateway.receive({ userId: "u", userName: "alice", text: "hello again" });
-	await gateway.waitForIdle();
-	assert.equal(channel.sent.at(-1)?.text, "Reply: hello again");
 });

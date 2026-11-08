@@ -6,17 +6,11 @@ import test, { type TestContext } from "node:test";
 
 import { PiBackend } from "../src/gateway/backend.js";
 import { startBridge, type Bridge } from "../src/actor/bridge.js";
-import { createConversation } from "../src/gateway/conversation/store.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { WebSocketTransport } from "../src/gateway/websocket.js";
 import { resolvePiBin, startMockLlm, writePiConfig } from "./support/bridge-harness.js";
-import { readRecords, recordTypes } from "./support/records.js";
-import { TestChannel } from "./support/test-channel.js";
 
 interface E2EHarness {
-	root: string;
-	conversation: Awaited<ReturnType<typeof createConversation>>;
-	channel: TestChannel;
 	gateway: Gateway;
 	/** Stops the actor the way a suspend would, keeping its workspace. */
 	suspend(): Promise<void>;
@@ -31,8 +25,6 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 	const agentDir = join(root, "agent");
 	const workspace = join(root, "workspace");
 	await writePiConfig(agentDir, llm.url);
-	const conversation = await createConversation(join(root, "gateway"));
-	const channel = new TestChannel();
 	// One port for the conversation: a resume puts a new process on it.
 	const port = 18_700 + Math.floor(Math.random() * 200);
 
@@ -54,14 +46,9 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 		log: process.env.PI_E2E_LOG ? (message) => console.error(`[transport] ${message}`) : () => undefined,
 	});
 	const backend = new PiBackend({ transport, turnTimeoutMs: 30_000 });
-	await backend.connect();
-	const gateway = new Gateway({ conversation, channel, backend });
-	await gateway.start();
+	const gateway = new Gateway({ backend });
 
 	const harness: E2EHarness = {
-		root,
-		conversation,
-		channel,
 		gateway,
 		async suspend() {
 			await bridge?.close();
@@ -71,13 +58,11 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 			await transport.close();
 		},
 		async resume() {
-			if (!bridge) {
-				await startActor();
-				await transport.connect();
-			}
+			if (!bridge) await startActor();
 		},
 		async close() {
 			await gateway.stop().catch(() => undefined);
+			await backend.close().catch(() => undefined);
 			await bridge?.close().catch(() => undefined);
 			await llm.close();
 			await rm(root, { recursive: true, force: true });
@@ -87,44 +72,20 @@ async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
 	return harness;
 }
 
-test("channel message reaches real pi and streams the reply back", async (t) => {
+test("a message reaches real pi and returns its reply", async (t) => {
 	const harness = await createE2E(t, "Hello from pi rpc.");
 
-	await harness.gateway.receive({ userId: "user-1", userName: "alice", text: "hello pi" });
-	await harness.gateway.waitForIdle();
-
-	assert.equal(harness.channel.sent.length, 1);
-	assert.equal(harness.channel.sent[0]?.text, "Hello from pi rpc.");
-	assert.ok(harness.channel.previews.length > 1, "the reply streamed through preview edits");
-
-	const records = await readRecords(harness.conversation.logPath);
-	assert.deepEqual(recordTypes(records), [
-		"inbound",
-		"job_queued",
-		"job_dispatched",
-		"outbound",
-		"job_completed",
-	]);
+	const reply = await harness.gateway.receive("hello pi");
+	assert.equal(reply.text, "Hello from pi rpc.");
 });
 
-test("a suspended actor resumes on the next message with its session intact", async (t) => {
+test("a suspended actor answers the next message after a fresh start", async (t) => {
 	const harness = await createE2E(t, "still here");
 
-	await harness.gateway.receive({ userId: "user-1", userName: "alice", text: "remember: 41" });
-	await harness.gateway.waitForIdle();
-	assert.equal(harness.channel.sent.length, 1);
+	assert.equal((await harness.gateway.receive("remember: 41")).text, "still here");
 
 	await harness.suspend();
 	await harness.resume();
 
-	await harness.gateway.receive({ userId: "user-1", userName: "alice", text: "what did I say?" });
-	await harness.gateway.waitForIdle();
-
-	assert.equal(harness.channel.sent.length, 2);
-	assert.equal(harness.channel.sent[1]?.text, "still here");
-
-	const records = await readRecords(harness.conversation.logPath);
-	assert.equal(records.filter((record) => record.type === "outbound").length, 2);
-	const dispatches = records.filter((record) => record.type === "job_dispatched");
-	assert.equal(new Set(dispatches.map((record) => ("requestId" in record ? record.requestId : ""))).size, 2);
+	assert.equal((await harness.gateway.receive("what did I say?")).text, "still here");
 });

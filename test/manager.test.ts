@@ -1,17 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
+import { StubBackend } from "./support/stub-backend.js";
 import { GatewayManager } from "../src/gateway/manager.js";
 import { ActorProvisioner, actorNameFor } from "../src/gateway/substrate/provisioner.js";
-
-async function tempRoot(t: test.TestContext): Promise<string> {
-	const root = await mkdtemp(join(tmpdir(), "pi-manager-"));
-	t.after(() => rm(root, { recursive: true, force: true }));
-	return root;
-}
 
 test("actor names are deterministic and legal", () => {
 	assert.equal(actorNameFor("local/chat"), "pi-local-chat");
@@ -44,11 +36,9 @@ test("a provisioned actor exists before its egress policy is applied", async () 
 	assert.deepEqual(calls, ["ensure pi-agents/pi-local-chat", "egress pi-agents/pi-local-chat"]);
 });
 
-test("the manager keeps one actor per conversation and isolates failures", async (t) => {
-	const root = await tempRoot(t);
+test("the manager keeps one actor per conversation", async () => {
 	const ensured: string[] = [];
 	const manager = new GatewayManager({
-		dataDir: root,
 		actorUrl: "ws://127.0.0.1:1",
 		actors: new ActorProvisioner({
 			atespace: "pi-agents",
@@ -62,6 +52,7 @@ test("the manager keeps one actor per conversation and isolates failures", async
 				},
 			},
 		}),
+		createBackend: () => new StubBackend(),
 	});
 
 	const spec = (conversationId: string) => ({
@@ -76,13 +67,8 @@ test("the manager keeps one actor per conversation and isolates failures", async
 	assert.notEqual(a.actor.name, b.actor.name, "conversations never share an actor");
 	assert.deepEqual(ensured.sort(), ["pi-local-a", "pi-local-b"]);
 
-	// A conversation that never opened reports a clear error and leaves the
-	// others untouched.
-	await assert.rejects(
-		manager.receive("local/missing", { userId: "u", text: "hi" }),
-		/unknown conversation/,
-	);
+	const reply = await manager.receive(spec("local/a"), "hi");
+	assert.equal(reply.text, "Reply: hi");
 
 	await manager.close();
 });
-

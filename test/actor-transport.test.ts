@@ -7,20 +7,13 @@ import { WebSocketTransport } from "../src/gateway/websocket.js";
 /** A transport whose connection can be dropped by the test. */
 class DoorTransport implements ActorTransport {
 	connected = false;
-	drops = 0;
 	sent: Array<Record<string, unknown>> = [];
 
 	private readonly records: Array<(record: Record<string, unknown>) => void> = [];
-	private readonly connects: Array<(isReconnect: boolean) => void> = [];
 	private readonly closes: Array<() => void> = [];
-	private everConnected = false;
 
 	async connect(): Promise<void> {
-		if (this.connected) return;
 		this.connected = true;
-		const isReconnect = this.everConnected;
-		this.everConnected = true;
-		for (const listener of this.connects) listener(isReconnect);
 	}
 
 	send(record: Record<string, unknown>): void {
@@ -36,10 +29,6 @@ class DoorTransport implements ActorTransport {
 		this.closes.push(listener);
 	}
 
-	onConnect(listener: (isReconnect: boolean) => void): void {
-		this.connects.push(listener);
-	}
-
 	async close(): Promise<void> {
 		this.connected = false;
 	}
@@ -47,7 +36,6 @@ class DoorTransport implements ActorTransport {
 	/** Simulates the actor going away without the client closing first. */
 	drop(): void {
 		this.connected = false;
-		this.drops += 1;
 		for (const listener of this.closes) listener();
 	}
 
@@ -57,26 +45,31 @@ class DoorTransport implements ActorTransport {
 	}
 }
 
-test("a dropped connection invalidates cached turns", async () => {
+async function untilSent(transport: DoorTransport): Promise<void> {
+	for (let i = 0; i < 100 && transport.sent.length === 0; i += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
+test("a bridge_result settles the turn", async () => {
 	const transport = new DoorTransport();
 	const backend = new PiBackend({ transport, turnTimeoutMs: 1_000 });
-	await backend.connect();
+	const turn = backend.submit({ requestId: "r1", prompt: "hi" });
+	await untilSent(transport);
 
-	const turn = backend.submit({ requestId: "r1", conversationId: "c", prompt: "hi" }, () => undefined);
-	transport.deliver({ type: "agent_settled" });
-	assert.equal((await turn).text, "");
+	assert.deepEqual(transport.sent[0], { id: "r1", type: "prompt", message: "hi" });
+	transport.deliver({ type: "bridge_result", requestId: "r1", text: "hello" });
+	assert.equal((await turn).text, "hello");
+});
 
-	// The actor can suspend between turns; its bridge cache goes with it. A
-	// retry must run the turn again rather than replay a result the restored
-	// actor never produced.
+test("a dropped connection fails the turn in flight", async () => {
+	const transport = new DoorTransport();
+	const backend = new PiBackend({ transport, turnTimeoutMs: 1_000 });
+	const turn = backend.submit({ requestId: "r1", prompt: "hi" });
+	await untilSent(transport);
+
 	transport.drop();
-	transport.sent = [];
-	const retried = backend.submit({ requestId: "r1", conversationId: "c", prompt: "hi" }, () => undefined);
-	retried.catch(() => undefined);
-	await new Promise((resolve) => setTimeout(resolve, 10));
-	assert.equal(transport.sent.some((record) => record.type === "prompt"), true);
-	transport.deliver({ type: "agent_settled" });
-	await retried;
+	await assert.rejects(turn, /connection closed/);
 });
 
 test("the websocket transport does not reconnect on its own", async () => {

@@ -1,14 +1,14 @@
-# The gateway keeps the channel connections and the conversation log, and
-# walks actors through their idle lifecycle. It reaches atenet-router over
-# HTTPS with a projected podidentity client certificate; the router must list
-# this ServiceAccount's SPIFFE ID in --ingress-allowed-spiffe-ids.
+# The gateway answers POST /messages and walks each conversation's actor
+# through its idle lifecycle. It reaches atenet-router over HTTPS with a
+# projected podidentity client certificate; the router must list this
+# ServiceAccount's SPIFFE ID in --ingress-allowed-spiffe-ids.
 #
 # It uses kubectl-ate for the control plane. The SA may mint a token for the
 # shared ate-client ServiceAccount, which the development install makes the
 # bootstrap owner. A production install should grant a narrower role instead.
 #
-# GATEWAY_NAME names the Service, Deployment, and PVC, so a second gateway can
-# run beside the first; GATEWAY_EGRESS_CONFIGMAP holds the per-actor policy.
+# GATEWAY_NAME names the Service and Deployment, so a second gateway can run
+# beside the first; GATEWAY_EGRESS_CONFIGMAP holds the per-actor policy.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -74,17 +74,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ${GATEWAY_NAME}-data
-  namespace: ${GATEWAY_NAMESPACE}
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi
----
-apiVersion: v1
 kind: Service
 metadata:
   name: ${GATEWAY_NAME}
@@ -106,10 +95,6 @@ metadata:
     app: ${GATEWAY_NAME}
 spec:
   replicas: 1
-  # One conversation store, one Telegram long-poll. Recreate keeps the RWO
-  # volume and the poller from overlapping during a rollout.
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app: ${GATEWAY_NAME}
@@ -137,8 +122,6 @@ spec:
           value: /run/pi-router/credential-bundle.pem
         - name: PI_ROUTER_KEY
           value: /run/pi-router/credential-bundle.pem
-        - name: PI_GATEWAY_DATA_DIR
-          value: /data
         - name: PI_HTTP_HOST
           value: 0.0.0.0
         - name: PI_ATESPACE
@@ -149,18 +132,9 @@ spec:
           value: /etc/pi/egress-policy.yaml
         - name: PI_IDLE_SECONDS
           value: "${IDLE_SECONDS}"
-        - name: PI_TELEGRAM_CHATS
-          value: "${TELEGRAM_CHATS}"
-        - name: PI_TELEGRAM_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: ${GATEWAY_TELEGRAM_SECRET}
-              key: token
         volumeMounts:
         - name: router-client
           mountPath: /run/pi-router
-        - name: data
-          mountPath: /data
         - name: egress
           mountPath: /etc/pi
       volumes:
@@ -177,9 +151,6 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: router-ca.pem
-      - name: data
-        persistentVolumeClaim:
-          claimName: ${GATEWAY_NAME}-data
       - name: egress
         configMap:
           name: ${GATEWAY_EGRESS_CONFIGMAP}

@@ -33,18 +33,15 @@ export interface WebSocketTransportOptions {
 }
 
 /**
- * ActorTransport over the bridge's WebSocket. Every reconnect is a fresh
- * connection: the bridge keeps no per-client state, so the backend asks for
- * what it needs after connecting.
+ * ActorTransport over the bridge's WebSocket. A turn connects, sends its
+ * prompt, and reads the reply; the bridge keeps no per-client state.
  */
 export class WebSocketTransport implements ActorTransport {
 	private readonly options: WebSocketTransportOptions;
 	private readonly recordListeners: Array<(record: Record<string, unknown>) => void> = [];
 	private readonly closeListeners: Array<() => void> = [];
-	private readonly connectListeners: Array<(isReconnect: boolean) => void> = [];
 	private socket: WebSocket | undefined;
 	private connecting: Promise<void> | undefined;
-	private everConnected = false;
 	private lastActivity = 0;
 
 	constructor(options: WebSocketTransportOptions) {
@@ -62,11 +59,6 @@ export class WebSocketTransport implements ActorTransport {
 	/** Reports a dropped connection; the owner decides whether to reconnect. */
 	onClose(listener: () => void): void {
 		this.closeListeners.push(listener);
-	}
-
-	/** `isReconnect` is true for every connect after the first. */
-	onConnect(listener: (isReconnect: boolean) => void): void {
-		this.connectListeners.push(listener);
 	}
 
 	connect(): Promise<void> {
@@ -101,9 +93,6 @@ export class WebSocketTransport implements ActorTransport {
 				socket.on("error", (error: Error) => {
 					this.options.log?.(`transport error: ${error.message}`);
 				});
-				const isReconnect = this.everConnected;
-				this.everConnected = true;
-				for (const listener of this.connectListeners) listener(isReconnect);
 			},
 			(error: unknown) => {
 				this.connecting = undefined;

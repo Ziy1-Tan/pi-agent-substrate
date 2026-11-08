@@ -47,16 +47,6 @@ export interface TurnResult {
  * atenet-router or by the local gateway, so the bridge carries no per-client
  * identity and takes no lifecycle decisions.
  *
- * Two bridge-only commands extend the Pi protocol:
- *
- *   {type: "bridge_get_state", id?, requestId?}
- *     answers with `bridge_state`: Pi's session info, partial text, and the
- *     result of `requestId` if this process still holds it.
- *
- *   {type: "bridge_result", id, requestId}
- *     answers with `bridge_result_reply`, letting a reconnected gateway recover
- *     a turn that settled while it was away.
- *
  * When a turn settles the bridge emits `bridge_result` alongside Pi's own
  * `agent_settled`, because Pi's event does not carry the request id.
  */
@@ -64,7 +54,6 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 	const log = options.log ?? ((message: string) => console.error(`[bridge] ${message}`));
 	const port = options.port ?? Number(process.env.PI_BRIDGE_PORT ?? 8787);
 	const activity = new PiActivity();
-	const results = new Map<string, TurnResult>();
 	let currentRequestId: string | undefined;
 
 	const healthPath = options.healthPath ?? "/healthz";
@@ -105,8 +94,7 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 		cwd: process.env.PI_BRIDGE_CWD || process.cwd(),
 		env: { ...process.env, ...options.piEnv },
 		onStderr: (line) => log(`pi stderr: ${line}`),
-		// A new child has no in-memory stream state. Settled results survive in
-		// `results`; only the partial text is discarded.
+		// A new child has no in-memory stream state.
 		onStart: () => activity.resetStream(),
 		onEvent: (event) => {
 			activity.observe(event);
@@ -116,7 +104,6 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 			const settled = activity.settled(event);
 			if (settled && currentRequestId !== undefined) {
 				const result: TurnResult = { requestId: currentRequestId, ...settled };
-				results.set(currentRequestId, result);
 				broadcast({ type: "bridge_result", ...result });
 				currentRequestId = undefined;
 			}
@@ -168,32 +155,6 @@ export async function startBridge(options: BridgeOptions = {}): Promise<Bridge> 
 				return;
 			}
 			const command = parsed as RpcCommand;
-			if (command.type === "bridge_get_state") {
-				const wanted = typeof command.requestId === "string" ? command.requestId : undefined;
-				const found = wanted ? results.get(wanted) : undefined;
-				socket.send(
-					JSON.stringify({
-						type: "bridge_state",
-						id: command.id,
-						...activity.snapshot(),
-						result: found,
-					}),
-				);
-				return;
-			}
-			if (command.type === "bridge_result") {
-				const wanted = typeof command.requestId === "string" ? command.requestId : undefined;
-				const found = wanted ? results.get(wanted) : undefined;
-				socket.send(
-					JSON.stringify({
-						type: "bridge_result_reply",
-						id: command.id,
-						found: found !== undefined,
-						result: found,
-					}),
-				);
-				return;
-			}
 			if (command.type === "prompt") {
 				// Pi's own id field is optional; the gateway's requestId is what
 				// the settled result is keyed by, so accept either.

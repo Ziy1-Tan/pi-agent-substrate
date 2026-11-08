@@ -1,14 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { LineFramer, encodeRecord } from "./lines.js";
-import {
-	assistantOutcome,
-	isAgentSettled,
-	isRpcResponse,
-	isTextDelta,
-	retryFailure,
-	type RpcState,
-} from "./rpc.js";
+import { assistantOutcome, isAgentSettled, isTextDelta, retryFailure } from "./rpc.js";
 
 export interface PiProcessOptions {
 	command: string;
@@ -100,17 +93,9 @@ export class PiProcess {
 	}
 }
 
-/**
- * The slice of Pi state a resumed client needs, derived only from the event
- * stream. It survives a snapshot restore because it is rebuilt from the same
- * stream, not from process memory.
- */
+/** Tracks one turn's stream so its settled outcome can be reported. */
 export class PiActivity {
 	streaming = false;
-	sessionId: string | undefined;
-	sessionFile: string | undefined;
-	messageCount: number | undefined;
-	pendingMessageCount: number | undefined;
 	text = "";
 	private lastAssistantText: string | undefined;
 	/** Set when the turn ended in a provider error rather than a reply. */
@@ -141,14 +126,6 @@ export class PiActivity {
 		const exhausted = retryFailure(event);
 		if (exhausted !== undefined) this.failure = exhausted;
 		if (isAgentSettled(event)) this.streaming = false;
-		if (isRpcResponse(event) && event.command === "get_state" && event.success) {
-			const data = event.data as RpcState | undefined;
-			this.streaming = data?.isStreaming ?? this.streaming;
-			this.sessionId = data?.sessionId ?? this.sessionId;
-			this.sessionFile = data?.sessionFile ?? this.sessionFile;
-			this.messageCount = data?.messageCount ?? this.messageCount;
-			this.pendingMessageCount = data?.pendingMessageCount ?? this.pendingMessageCount;
-		}
 	}
 
 	/** The turn's outcome once `agent_settled` arrives; undefined before that. */
@@ -157,24 +134,6 @@ export class PiActivity {
 		return this.failure === undefined
 			? { text: this.lastAssistantText ?? this.text }
 			: { text: "", error: this.failure };
-	}
-
-	snapshot(): {
-		streaming: boolean;
-		sessionId?: string;
-		sessionFile?: string;
-		messageCount?: number;
-		pendingMessageCount?: number;
-		text: string;
-	} {
-		return {
-			streaming: this.streaming,
-			sessionId: this.sessionId,
-			sessionFile: this.sessionFile,
-			messageCount: this.messageCount,
-			pendingMessageCount: this.pendingMessageCount,
-			text: this.text,
-		};
 	}
 }
 

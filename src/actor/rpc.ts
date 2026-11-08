@@ -11,14 +11,6 @@ export interface RpcCommand {
 	[key: string]: unknown;
 }
 
-export interface RpcState {
-	isStreaming?: boolean;
-	sessionId?: string;
-	sessionFile?: string;
-	messageCount?: number;
-	pendingMessageCount?: number;
-}
-
 export function isRpcResponse(value: unknown): value is { type: "response"; command: string; success: boolean; data?: unknown } {
 	return isObject(value) && value.type === "response" && typeof value.command === "string";
 }

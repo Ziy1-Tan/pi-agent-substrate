@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Local, single-user deployment: kind cluster, real model provider, Telegram.
+# Local, single-user deployment: kind cluster, real model provider.
 #
-# This is the path for "my own machine, my own bot". It deploys the gateway
-# into the cluster: the gateway reaches atenet-router over HTTPS with its
-# projected podidentity certificate, keeps its conversation log on a PVC, and
-# reads the bot token from a Secret. The actor never sees either.
+# It deploys the gateway into the cluster: the gateway reaches atenet-router
+# over HTTPS with its projected podidentity certificate and answers
+# POST /messages. The provider key goes into a Secret and never enters the
+# actor; egress injects it.
 #
 # Assumes:
 #   - kind cluster with Agent Substrate v1.0.0 installed
@@ -46,8 +46,6 @@
 #   WORKER_IMAGE      worker image (default: the cluster's existing pool for
 #                     this class, then the release image for SUBSTRATE_VERSION)
 #   IDLE_SECONDS      idle window before suspend (default: 60)
-#   TELEGRAM_TOKEN    bot token; empty disables the Telegram entry point
-#   TELEGRAM_CHATS    comma-separated chat ids to answer (empty: any chat)
 #   GATEWAY_NAMESPACE namespace for the gateway (default: pi-gateway)
 #   SUBSTRATE_NAMESPACE system namespace (default: ate-system)
 #   REGISTRY          image registry (default: localhost:5001)
@@ -80,12 +78,9 @@ SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLA
 WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool-${SANDBOX_CLASS_NAME}}"
 WORKER_IMAGE="${WORKER_IMAGE:-}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
-TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-${PI_TELEGRAM_TOKEN:-}}"
-TELEGRAM_CHATS="${TELEGRAM_CHATS:-${PI_TELEGRAM_CHATS:-}}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-pi-gateway}"
 GATEWAY_NAME="${GATEWAY_NAME:-pi-gateway}"
 GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP:-pi-gateway-egress}"
-GATEWAY_TELEGRAM_SECRET="${GATEWAY_TELEGRAM_SECRET:-pi-telegram}"
 SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE:-ate-system}"
 REGISTRY="${REGISTRY:-localhost:5001}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-${REGISTRY}/pi-gateway:local}"
@@ -316,9 +311,6 @@ fi
 
 echo "==> creating the gateway namespace and inputs"
 "${kube[@]}" create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | "${kube[@]}" apply -f -
-"${kube[@]}" -n "${GATEWAY_NAMESPACE}" create secret generic "${GATEWAY_TELEGRAM_SECRET}" \
-  --from-literal=token="${TELEGRAM_TOKEN}" \
-  --dry-run=client -o yaml | "${kube[@]}" apply -f -
 "${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
   --from-file=egress-policy.yaml="${RENDERED_POLICY}" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -
@@ -326,15 +318,12 @@ echo "==> creating the gateway namespace and inputs"
 echo "==> applying the gateway"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" GATEWAY_NAME="${GATEWAY_NAME}" \
   GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP}" \
-  GATEWAY_TELEGRAM_SECRET="${GATEWAY_TELEGRAM_SECRET}" \
   SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
   GATEWAY_IMAGE="${GATEWAY_IMAGE}" ATESPACE="${ATESPACE}" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
-  IDLE_SECONDS="${IDLE_SECONDS}" TELEGRAM_CHATS="${TELEGRAM_CHATS}" \
-  envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${GATEWAY_TELEGRAM_SECRET} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS} ${TELEGRAM_CHATS}' \
+  IDLE_SECONDS="${IDLE_SECONDS}" \
+  envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS}' \
   < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
 "${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status "deploy/${GATEWAY_NAME}" --timeout=180s
-
-telegram_status=$([[ -n "${TELEGRAM_TOKEN}" ]] && echo enabled || echo disabled)
 
 cat <<EOF
 
@@ -348,6 +337,5 @@ Reach the gateway API from this machine:
     -d '{"conversation":"${CONVERSATION}","text":"hello"}'
 
 The gateway reaches actors through atenet-router over wss, creates the actor
-on first use, and suspends it ${IDLE_SECONDS}s after the last turn. Telegram is
-${telegram_status}; chats: ${TELEGRAM_CHATS:-any}.
+on first use, and suspends it ${IDLE_SECONDS}s after the last turn.
 EOF

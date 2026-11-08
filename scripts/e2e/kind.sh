@@ -15,7 +15,6 @@
 #   ACTOR_TEMPLATE    template name (default: pi-e2e, distinct from the manual
 #                     pi-actor template so the two cannot be mixed up)
 #   ATESPACE          atespace (default: pi-agents)
-#   ROUTER_URL        router base URL as seen from this machine (default: http://127.0.0.1:8000)
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
 #   HTTP_PORT         port for the HTTP-channel e2e (default: 8899)
 #   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
@@ -42,8 +41,6 @@ KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
 REGISTRY="${REGISTRY:-localhost:5001}"
 ATESPACE="${ATESPACE:-pi-agents}"
 ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-e2e}"
-ACTOR="${ACTOR:-pi-actor-1}"
-ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:8000}"
 IDLE_SECONDS="${IDLE_SECONDS:-15}"
 HTTP_PORT="${HTTP_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
@@ -56,7 +53,6 @@ GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-pi-gateway}"
 SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE:-ate-system}"
 E2E_GATEWAY_NAME="${E2E_GATEWAY_NAME:-pi-gateway-e2e}"
 E2E_GATEWAY_EGRESS="${E2E_GATEWAY_EGRESS:-pi-gateway-e2e-egress}"
-E2E_GATEWAY_TELEGRAM="${E2E_GATEWAY_TELEGRAM:-pi-gateway-e2e-telegram}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-${REGISTRY}/pi-gateway:local}"
 ONLY="${ONLY:-}"
 
@@ -180,59 +176,30 @@ if [[ "${ONLY}" != "e2e" ]]; then
     sleep 5
   done
 
-  echo "==> creating actor ${ATESPACE}/${ACTOR}"
-  # An actor left by an earlier run belongs to the template this run replaced
-  # and can never resume, so it is removed first. Output formats are limited
-  # to table/json/yaml here, so presence is tested against table output.
-  if "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get actor "${ACTOR}" -a "${ATESPACE}" 2>/dev/null | grep -q "${ACTOR}"; then
-    echo "    removing actor ${ACTOR}, left over from an earlier run"
-    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor "${ACTOR}" -a "${ATESPACE}"
-  fi
-  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor "${ACTOR}" -a "${ATESPACE}" --template "${ACTOR_TEMPLATE}"
 fi
 
 if [[ "${ONLY}" != "deploy" ]]; then
-  # v1.0.0's router only exposes mTLS listeners. The actor e2e uses the
-  # kubectl-ate CONNECT proxy, which mints a client certificate and resumes
-  # the actor when the connection opens.
-  echo "==> proxying ${ATESPACE}/${ACTOR} on 8000"
-  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} \
-    proxy actor "${ACTOR}" -a "${ATESPACE}" 8000:80 >/tmp/pi-e2e-proxy.log 2>&1 &
-  forward=$!
-  trap 'kill ${forward} 2>/dev/null || true' EXIT
-  for _ in $(seq 1 30); do
-    if curl -sf -o /dev/null "http://127.0.0.1:8000/" 2>/dev/null; then break; fi
-    sleep 1
-  done
-
-  echo "==> running the clustered e2e"
-  PI_ATESPACE="${ATESPACE}" PI_ACTOR="${ACTOR}" PI_ROUTER_URL="${ROUTER_URL}" \
-    KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
-    node scripts/e2e/actor.js
-
   echo "==> deploying the e2e gateway"
   "${kube[@]}" create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | "${kube[@]}" apply -f -
-  "${kube[@]}" -n "${GATEWAY_NAMESPACE}" create secret generic "${E2E_GATEWAY_TELEGRAM}" \
-    --from-literal=token= --dry-run=client -o yaml | "${kube[@]}" apply -f -
   "${kube[@]}" -n "${GATEWAY_NAMESPACE}" create configmap "${E2E_GATEWAY_EGRESS}" \
     --from-file=egress-policy.yaml="${EGRESS_POLICY}" \
     --dry-run=client -o yaml | "${kube[@]}" apply -f -
-  # Start from an empty store so the metrics counters describe this run.
+  # Start from an empty deployment so the metrics counters describe this run.
   "${kube[@]}" -n "${GATEWAY_NAMESPACE}" delete deploy/"${E2E_GATEWAY_NAME}" svc/"${E2E_GATEWAY_NAME}" \
-    pvc/"${E2E_GATEWAY_NAME}-data" --ignore-not-found >/dev/null
+    --ignore-not-found >/dev/null
   GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE}" GATEWAY_NAME="${E2E_GATEWAY_NAME}" \
-    GATEWAY_EGRESS_CONFIGMAP="${E2E_GATEWAY_EGRESS}" GATEWAY_TELEGRAM_SECRET="${E2E_GATEWAY_TELEGRAM}" \
+    GATEWAY_EGRESS_CONFIGMAP="${E2E_GATEWAY_EGRESS}" \
     SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE}" \
     GATEWAY_IMAGE="${GATEWAY_IMAGE}" ATESPACE="${ATESPACE}" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" \
-    IDLE_SECONDS="${IDLE_SECONDS}" TELEGRAM_CHATS='' \
-    envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${GATEWAY_TELEGRAM_SECRET} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS} ${TELEGRAM_CHATS}' \
+    IDLE_SECONDS="${IDLE_SECONDS}" \
+    envsubst '${GATEWAY_NAMESPACE} ${GATEWAY_NAME} ${GATEWAY_EGRESS_CONFIGMAP} ${SUBSTRATE_NAMESPACE} ${GATEWAY_IMAGE} ${ATESPACE} ${ACTOR_TEMPLATE} ${IDLE_SECONDS}' \
     < deploy/local/gateway.yaml.tmpl | "${kube[@]}" apply -f -
   "${kube[@]}" -n "${GATEWAY_NAMESPACE}" rollout status "deploy/${E2E_GATEWAY_NAME}" --timeout=180s
   "${kube[@]}" -n "${GATEWAY_NAMESPACE}" port-forward "svc/${E2E_GATEWAY_NAME}" "${HTTP_PORT}:8788" >/tmp/pi-e2e-gateway.log 2>&1 &
   gateway_forward=$!
-  trap 'kill ${forward:-} ${gateway_forward:-} 2>/dev/null || true' EXIT
+  trap 'kill ${gateway_forward:-} 2>/dev/null || true' EXIT
 
-  echo "==> running the HTTP channel e2e"
+  echo "==> running the gateway e2e"
   PI_ATESPACE="${ATESPACE}" \
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     PI_IDLE_SECONDS="${IDLE_SECONDS}" PI_HTTP_PORT="${HTTP_PORT}" \
@@ -242,5 +209,5 @@ if [[ "${ONLY}" != "deploy" ]]; then
   echo "==> removing the e2e gateway"
   kill "${gateway_forward}" 2>/dev/null || true
   "${kube[@]}" -n "${GATEWAY_NAMESPACE}" delete deploy/"${E2E_GATEWAY_NAME}" svc/"${E2E_GATEWAY_NAME}" \
-    pvc/"${E2E_GATEWAY_NAME}-data" configmap/"${E2E_GATEWAY_EGRESS}" --ignore-not-found >/dev/null
+    configmap/"${E2E_GATEWAY_EGRESS}" --ignore-not-found >/dev/null
 fi

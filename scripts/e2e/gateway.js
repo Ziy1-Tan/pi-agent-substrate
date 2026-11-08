@@ -8,14 +8,14 @@
  *
  * A kind WorkerPool is small, so the two conversations are exercised in
  * sequence: the first one finishes and suspends before the second opens. The
- * point is that each conversation owns a distinct actor and its own log, not
- * that two actors run at once.
+ * point is that each conversation owns a distinct actor, not that two actors
+ * run at once.
  *
  *   1. `POST /messages` answers a curl-sized request with the settled reply
  *   2. /metrics reports the turn, and `/` answers 404 since the page is gone
  *   3. the idle window suspends the actor with no command, and the next
- *      message resumes it; the resume latency lands in /metrics
- *   4. a second conversation gets a different actor and its own log
+ *      message resumes it; the counters show it
+ *   4. a second conversation gets a different actor
  */
 import { actorNameFor, actorState as readActorState, ateClient, createChecks, removeActor, waitFor } from "./lib.js";
 
@@ -107,7 +107,7 @@ async function main() {
 		);
 
 		// A kind WorkerPool is small, so the second conversation runs after the
-		// first one has suspended. It still gets its own actor and its own log.
+		// first one has suspended. It still gets its own actor.
 		const beta = await post(betaId, "say hello to beta");
 		check(
 			"the second conversation gets its own reply",
@@ -128,10 +128,6 @@ async function main() {
 		const metrics = await (await fetch(`http://127.0.0.1:${port}/metrics`)).json();
 		check("turns are counted", (metrics.counters?.turns ?? 0) >= 3, JSON.stringify(metrics.counters));
 		check("resumed turns are counted", (metrics.counters?.resumed_turns ?? 0) >= 1, JSON.stringify(metrics.counters));
-		check("turn latency is recorded", (metrics.timings?.turn_millis?.count ?? 0) >= 3, JSON.stringify(metrics.timings));
-		check("first-token latency is recorded", (metrics.timings?.first_token_millis?.count ?? 0) >= 3);
-		log(`resume latency p50=${metrics.timings?.resume_millis?.p50}ms p95=${metrics.timings?.resume_millis?.p95}ms`);
-		log(`turn latency p50=${metrics.timings?.turn_millis?.p50}ms p95=${metrics.timings?.turn_millis?.p95}ms`);
 	} finally {
 		// Without a second worker slot, an actor left RUNNING here takes a slot
 		// from a real conversation and makes its next turn fail with a 503, so

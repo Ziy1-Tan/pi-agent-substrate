@@ -42,6 +42,7 @@ class ManualClock implements LifecycleClock {
 class RecordingControl implements ActorControl {
 	suspends = 0;
 	async ensure(_actor: ActorRef): Promise<void> {}
+	async applyEgress(_actor: ActorRef, _manifest: string): Promise<void> {}
 	async suspend(_actor: ActorRef): Promise<void> {
 		this.suspends += 1;
 	}

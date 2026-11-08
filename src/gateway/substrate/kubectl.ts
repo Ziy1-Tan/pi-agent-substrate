@@ -62,8 +62,8 @@ export class KubectlAteControl implements ActorControl {
 		}
 	}
 
-	/** Creates the actor's egress policy; one that already exists is kept. */
-	async createEgressPolicy(actor: ActorRef, manifest: string): Promise<void> {
+	/** Applies the actor's egress policy; one that already exists is kept. */
+	async applyEgress(actor: ActorRef, manifest: string): Promise<void> {
 		try {
 			await this.call(["create", "egress-policy", actor.name, "-a", actor.atespace, "-f", manifest]);
 			this.log(`applied egress policy to ${actor.atespace}/${actor.name}`);

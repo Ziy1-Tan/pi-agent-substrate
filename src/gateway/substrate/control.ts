@@ -7,7 +7,7 @@ export interface ActorRef {
 export type ActorState = "running" | "suspended" | "suspending" | "unknown" | "crashed";
 
 /**
- * The control-plane operations the lifecycle needs. Resume is deliberately
+ * The control-plane operations the gateway needs. Resume is deliberately
  * absent: atenet-router resumes on the next connect, so the gateway never
  * races it with an explicit call.
  */
@@ -18,6 +18,8 @@ export interface ActorControl {
 	suspend(actor: ActorRef): Promise<void>;
 	/** Best-effort read used for diagnostics and for ending SUSPENDING. */
 	state(actor: ActorRef): Promise<ActorState>;
+	/** Applies the egress policy manifest; one that already exists is kept. */
+	applyEgress(actor: ActorRef, manifest: string): Promise<void>;
 }
 
 export type LifecycleReason =

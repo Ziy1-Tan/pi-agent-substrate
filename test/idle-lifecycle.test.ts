@@ -65,6 +65,8 @@ class FakeControl implements ActorControl {
 		this.ensured += 1;
 	}
 
+	async applyEgress(_actor: ActorRef, _manifest: string): Promise<void> {}
+
 	async suspend(_actor: ActorRef): Promise<void> {
 		this.suspends += 1;
 		if (this.failSuspend) throw this.failSuspend;

@@ -5,16 +5,14 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { GatewayManager, type ConversationSpec } from "./manager.js";
+import { GatewayManager } from "./manager.js";
 import type { AgentResponse } from "./backend.js";
 
 export interface HttpServerOptions {
 	manager: GatewayManager;
 	port?: number;
-	/** Listen address; defaults to 127.0.0.1. */
+	/** Listen address; defaults to 0.0.0.0. */
 	host?: string;
-	/** Resolves a conversation id to its actor and lifecycle settings. */
-	specFor: (conversationId: string) => ConversationSpec;
 	log?: (message: string) => void;
 }
 
@@ -74,7 +72,7 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 		// conversation each get their own answer rather than the last to settle.
 		let reply: AgentResponse;
 		try {
-			reply = await options.manager.receive(options.specFor(conversationId), text);
+			reply = await options.manager.receive(conversationId, text);
 		} catch (error) {
 			respond(response, 502, { error: describe(error) });
 			return;
@@ -86,7 +84,7 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 		respond(response, 200, { conversation: conversationId, text: reply.text });
 	}
 
-	server.listen(port, options.host ?? "127.0.0.1");
+	server.listen(port, options.host ?? "0.0.0.0");
 	await new Promise<void>((resolve, reject) => {
 		server.once("listening", () => resolve());
 		server.once("error", reject);

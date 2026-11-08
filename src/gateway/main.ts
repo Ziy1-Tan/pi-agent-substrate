@@ -21,10 +21,9 @@
  *                          `deploy/e2e/egress-policy.yaml`; empty disables it)
  *   PI_IDLE_SECONDS        idle window before suspend (0 disables, default 60)
  */
-import { GatewayManager, type ConversationSpec } from "./manager.js";
+import { GatewayManager } from "./manager.js";
 import { startHttpServer } from "./server.js";
 import { KubectlAteControl } from "./substrate/kubectl.js";
-import { ActorProvisioner } from "./substrate/provisioner.js";
 
 const idleSeconds = Number(process.env.PI_IDLE_SECONDS ?? 60);
 const egressPolicy = process.env.PI_EGRESS_POLICY ?? "deploy/e2e/egress-policy.yaml";
@@ -38,36 +37,25 @@ const routerTls = {
 const actorUrl = process.env.PI_ACTOR_URL;
 if (!actorUrl) throw new Error("PI_ACTOR_URL is required");
 
-const control = new KubectlAteControl({
-	template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
-	log: (message) => console.error(`[substrate] ${message}`),
-});
-
-// Without an egress policy the sandbox cannot reach the model, and the failure
-// looks like an empty reply rather than an error.
-const actors = new ActorProvisioner({
-	atespace: process.env.PI_ATESPACE ?? "pi-agents",
-	control,
-	applyEgress: egressPolicy ? (actor) => control.createEgressPolicy(actor, egressPolicy) : undefined,
-});
-
 const manager = new GatewayManager({
 	actorUrl,
 	transportTls: routerTls.ca || routerTls.cert || routerTls.key ? routerTls : undefined,
-	actors,
-	log: (message) => console.error(`[gateway] ${message}`),
-});
-
-const specFor = (conversationId: string): ConversationSpec => ({
-	conversationId,
+	control: new KubectlAteControl({
+		template: process.env.PI_ACTOR_TEMPLATE ?? "pi-actor",
+		log: (message) => console.error(`[substrate] ${message}`),
+	}),
+	atespace: process.env.PI_ATESPACE ?? "pi-agents",
+	// Without an egress policy the sandbox cannot reach the model, and the
+	// failure looks like an empty reply rather than an error.
+	egressPolicy: egressPolicy || undefined,
 	idleMs: idleSeconds * 1000,
+	log: (message) => console.error(`[gateway] ${message}`),
 });
 
 const server = await startHttpServer({
 	manager,
 	port: 8788,
 	host: "0.0.0.0",
-	specFor,
 	log: (message) => console.error(`[http] ${message}`),
 });
 

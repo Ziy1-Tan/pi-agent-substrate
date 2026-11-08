@@ -34,7 +34,7 @@ function ateClient() {
 	return { atespace, ate };
 }
 
-/** `local/chat` -> `pi-local-chat`; mirrors `actorNameFor` in src/gateway/substrate/provisioner.ts. */
+/** `local/chat` -> `pi-local-chat`; mirrors `actorNameFor` in src/gateway/manager.ts. */
 function actorNameFor(conversationId, prefix = "pi-") {
 	const sanitized = conversationId
 		.toLowerCase()

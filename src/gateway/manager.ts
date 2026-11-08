@@ -2,23 +2,17 @@ import { randomUUID } from "node:crypto";
 
 import { PiBackend, type AgentBackend, type AgentResponse } from "./backend.js";
 import { IdleLifecycle } from "./substrate/idle.js";
-import type { ActorRef } from "./substrate/control.js";
-import type { ActorProvisioner } from "./substrate/provisioner.js";
+import type { ActorControl, ActorRef } from "./substrate/control.js";
 import { WebSocketTransport, type WebSocketTlsOptions } from "./websocket.js";
 
-export interface ConversationSpec {
-	conversationId: string;
-	idleMs: number;
-}
-
-/** The slice of the idle lifecycle a turn needs. */
-export interface TurnLifecycle {
-	/** Creates the actor if absent and lets a resume finish before the prompt. */
-	ready(): Promise<void>;
-	turnStarted(): void;
-	turnSettled(): void;
-	readonly state: string;
-	close?(): Promise<void>;
+/** `local/chat` -> `pi-local-chat`. Stable, and legal as a Kubernetes name. */
+export function actorNameFor(conversationId: string): string {
+	const sanitized = conversationId
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 40);
+	return `pi-${sanitized || "conversation"}`;
 }
 
 export interface TurnReport {
@@ -30,7 +24,7 @@ export interface TurnReport {
 export interface ConversationOptions {
 	actor: ActorRef;
 	backend: AgentBackend;
-	lifecycle?: TurnLifecycle;
+	lifecycle?: IdleLifecycle;
 	onTurn?: (report: TurnReport) => void;
 }
 
@@ -42,7 +36,7 @@ export interface ConversationOptions {
 export class Conversation {
 	readonly actor: ActorRef;
 	private readonly backend: AgentBackend;
-	private readonly lifecycle: TurnLifecycle | undefined;
+	private readonly lifecycle: IdleLifecycle | undefined;
 	private readonly onTurn: ((report: TurnReport) => void) | undefined;
 	private tail: Promise<unknown> = Promise.resolve();
 
@@ -62,7 +56,7 @@ export class Conversation {
 	async close(): Promise<void> {
 		await this.tail.catch(() => undefined);
 		await this.backend.close?.().catch(() => undefined);
-		await this.lifecycle?.close?.().catch(() => undefined);
+		await this.lifecycle?.close().catch(() => undefined);
 	}
 
 	private async runTurn(prompt: string): Promise<AgentResponse> {
@@ -105,7 +99,13 @@ export interface ManagerOptions {
 	actorUrl: string;
 	/** TLS settings for the router when actorUrl is wss. */
 	transportTls?: WebSocketTlsOptions;
-	actors: ActorProvisioner;
+	control: ActorControl;
+	/** Atespace that holds the actors. */
+	atespace: string;
+	/** Egress policy manifest applied to each new actor; unset disables. */
+	egressPolicy?: string;
+	/** Idle window before suspend, shared by every conversation. */
+	idleMs: number;
 	metrics?: Metrics;
 	/** Replaces the actor backend; tests use it to run without a cluster. */
 	createBackend?: (conversationId: string) => AgentBackend;
@@ -113,10 +113,9 @@ export interface ManagerOptions {
 }
 
 /**
- * Owns one conversation per conversation id, each on the actor the
- * provisioner places it on. Conversations share the control plane and the
- * bridge endpoint but never an actor: a suspend in one must not take another
- * with it.
+ * Owns one conversation per conversation id, each on its own actor: a
+ * suspend in one must not take another with it. The actor is created and its
+ * egress policy applied when the conversation first opens.
  */
 export class GatewayManager {
 	private readonly options: ManagerOptions;
@@ -134,19 +133,19 @@ export class GatewayManager {
 	}
 
 	/** Opens a conversation on first use; concurrent callers share the work. */
-	async ensure(spec: ConversationSpec): Promise<Conversation> {
-		const existing = this.entries.get(spec.conversationId);
+	async ensure(conversationId: string): Promise<Conversation> {
+		const existing = this.entries.get(conversationId);
 		if (existing) return existing;
-		const pending = this.opening.get(spec.conversationId);
+		const pending = this.opening.get(conversationId);
 		if (pending) return pending;
-		const created = this.open(spec).finally(() => this.opening.delete(spec.conversationId));
-		this.opening.set(spec.conversationId, created);
+		const created = this.open(conversationId).finally(() => this.opening.delete(conversationId));
+		this.opening.set(conversationId, created);
 		return created;
 	}
 
 	/** Runs one turn and returns its reply to the HTTP caller. */
-	async receive(spec: ConversationSpec, prompt: string): Promise<AgentResponse> {
-		const conversation = await this.ensure(spec);
+	async receive(conversationId: string, prompt: string): Promise<AgentResponse> {
+		const conversation = await this.ensure(conversationId);
 		return conversation.receive(prompt);
 	}
 
@@ -156,23 +155,25 @@ export class GatewayManager {
 		for (const conversation of entries) await conversation.close();
 	}
 
-	private async open(spec: ConversationSpec): Promise<Conversation> {
+	private async open(conversationId: string): Promise<Conversation> {
 		const log = this.options.log ?? (() => undefined);
-		const actor = await this.options.actors.provision(spec.conversationId);
+		const actor: ActorRef = { atespace: this.options.atespace, name: actorNameFor(conversationId) };
+		await this.options.control.ensure(actor);
+		if (this.options.egressPolicy) await this.options.control.applyEgress(actor, this.options.egressPolicy);
 
 		const transport = new WebSocketTransport({
 			url: this.options.actorUrl,
 			targetActor: `${actor.atespace}/${actor.name}`,
 			tls: this.options.transportTls,
-			log: (message) => log(`[${spec.conversationId}] ${message}`),
+			log: (message) => log(`[${conversationId}] ${message}`),
 		});
-		const backend = this.options.createBackend?.(spec.conversationId) ?? new PiBackend({ transport });
+		const backend = this.options.createBackend?.(conversationId) ?? new PiBackend({ transport });
 
 		const lifecycle = new IdleLifecycle({
 			actor,
-			control: this.options.actors.control,
-			idleMs: spec.idleMs,
-			log: (message) => log(`[${spec.conversationId}] ${message}`),
+			control: this.options.control,
+			idleMs: this.options.idleMs,
+			log: (message) => log(`[${conversationId}] ${message}`),
 			onEvent: (event) => {
 				if (event.reason === "suspend_requested") this.metrics.increment("suspends");
 				if (event.reason === "idle_elapsed") this.metrics.increment("idle_windows");
@@ -189,8 +190,8 @@ export class GatewayManager {
 				if (report.resumed) this.metrics.increment("resumed_turns");
 			},
 		});
-		this.entries.set(spec.conversationId, conversation);
-		log(`opened ${spec.conversationId} on ${actor.atespace}/${actor.name}`);
+		this.entries.set(conversationId, conversation);
+		log(`opened ${conversationId} on ${actor.atespace}/${actor.name}`);
 		return conversation;
 	}
 }

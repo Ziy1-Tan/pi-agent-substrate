@@ -2,42 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { StubBackend } from "./support/stub-backend.js";
-import { startHttpServer, type HttpServer } from "../src/gateway/server.js";
+import { startHttpServer } from "../src/gateway/server.js";
 import { GatewayManager } from "../src/gateway/manager.js";
-import { ActorProvisioner } from "../src/gateway/substrate/provisioner.js";
-
-/** Actors that already exist and never leave the running state. */
-function idleActors(): ActorProvisioner {
-	return new ActorProvisioner({
-		atespace: "pi-agents",
-		control: {
-			async ensure() {},
-			async suspend() {},
-			async state() {
-				return "running" as const;
-			},
-		},
-	});
-}
 
 interface Setup {
-	server: HttpServer;
+	server: { port: number };
 	manager: GatewayManager;
 }
 
 async function setup(t: test.TestContext): Promise<Setup> {
 	const manager = new GatewayManager({
 		actorUrl: "ws://127.0.0.1:1",
-		actors: idleActors(),
+		control: {
+			async ensure() {},
+			async applyEgress() {},
+			async suspend() {},
+			async state() {
+				return "running" as const;
+			},
+		},
+		atespace: "pi-agents",
+		idleMs: 60_000,
 		createBackend: () => new StubBackend(),
 	});
 	const server = await startHttpServer({
 		manager,
 		port: 0,
-		specFor: (conversationId) => ({
-			conversationId,
-			idleMs: 60_000,
-		}),
 	});
 	t.after(async () => {
 		await server.close();

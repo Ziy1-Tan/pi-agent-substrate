@@ -15,40 +15,18 @@
 # Env:
 #   KUBE_CONTEXT      kubectl context (default: kind-kind)
 #   KUBECTL_ATE       kubectl-ate binary (default: kubectl-ate)
-#   KUBECTL_ATE_BIN   local binary copied into the gateway image
-#                     (default: KUBECTL_ATE resolved on PATH)
-#   SUBSTRATE_VERSION substrate release the cluster and CLI run (default:
-#                     package.json substrateVersion)
 #   ATESPACE          atespace (default: pi-agents); created if absent
 #   ACTOR_TEMPLATE    template name (default: pi-local-v1-0-0; names may not
 #                     contain dots)
-#   WORKERPOOL_NAME   WorkerPool name (default: pi-workerpool-<class>)
-#   CONVERSATION      conversation to pre-create an actor for (default: local/chat)
-#   ACTOR             actor name (default: derived from CONVERSATION, matching
-#                     the gateway's mapping: local/chat -> pi-local-chat)
-#   PROVIDER_ENV      provider config file, sourced if present
-#                     (default: deploy/local/provider.env)
-#   PI_PROVIDER       provider id (required)
-#   PI_MODEL          model id (required)
-#   PI_PROVIDER_BASE_URL  provider endpoint (required)
-#   PI_PROVIDER_API   wire protocol: openai-completions, openai-responses, or
-#                     anthropic-messages (required)
-#   PI_PROVIDER_API_KEY   API key, written to a Secret (required)
-#   PI_MODEL_CONTEXT_WINDOW / PI_MODEL_MAX_TOKENS
-#                     optional model metadata (Pi defaults: 128000 / 16384)
-#   EGRESS_POLICY     egress manifest template (default:
-#                     deploy/local/egress-policy.yaml.tmpl)
-#   PROVIDER_HOST     host named in the egress policy (default: parsed from the
-#                     provider's baseUrl)
-#   SECRET_NAME       Kubernetes Secret holding the API key (default: pi-provider)
 #   SANDBOX_CLASS_NAME  microvm (default) or gvisor
-#   SANDBOX_CONFIG_NAME SandboxConfig name (default: microvm or gvisor-default)
 #   WORKER_IMAGE      worker image (default: the cluster's existing pool for
-#                     this class, then the release image for SUBSTRATE_VERSION)
+#                     this class, then the release image)
 #   IDLE_SECONDS      idle window before suspend (default: 60)
-#   GATEWAY_NAMESPACE namespace for the gateway (default: pi-gateway)
-#   SUBSTRATE_NAMESPACE system namespace (default: ate-system)
 #   REGISTRY          image registry (default: localhost:5001)
+#   PROVIDER_ENV      provider config file (default: deploy/local/provider.env)
+#   PI_PROVIDER / PI_MODEL / PI_PROVIDER_BASE_URL / PI_PROVIDER_API /
+#   PI_PROVIDER_API_KEY
+#                     source provider values, normally from provider.env
 #
 # The API key never enters the actor. The template carries a placeholder, and
 # the egress gateway replaces the auth header on the way out.
@@ -59,31 +37,25 @@ cd "${ROOT}"
 # shellcheck source=scripts/lib.sh
 . "${ROOT}/scripts/lib.sh"
 
-SUBSTRATE_VERSION="${SUBSTRATE_VERSION:-$(node -p "require('./package.json').substrateVersion")}"
+SUBSTRATE_VERSION="$(node -p "require('./package.json').substrateVersion")"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
 ATESPACE="${ATESPACE:-pi-agents}"
 ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-local-v1-0-0}"
-CONVERSATION="${CONVERSATION:-local/chat}"
-# The gateway derives an actor name from the conversation id; creating an actor
-# under any other name would leave it unused and make the gateway create its own.
-# The replacement uses -E because BSD sed does not understand `\+`.
-CONVERSATION_SLUG="$(printf '%s' "${CONVERSATION}" | tr '[:upper:]' '[:lower:]' | sed -E -e 's/[^a-z0-9-]+/-/g' -e 's/^-+//' -e 's/-+$//' | cut -c1-40)"
-ACTOR="${ACTOR:-pi-${CONVERSATION_SLUG:-conversation}}"
 PROVIDER_ENV="${PROVIDER_ENV:-deploy/local/provider.env}"
-EGRESS_POLICY="${EGRESS_POLICY:-deploy/local/egress-policy.yaml.tmpl}"
-SECRET_NAME="${SECRET_NAME:-pi-provider}"
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-microvm}"
-SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLASS_NAME}")}"
-WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool-${SANDBOX_CLASS_NAME}}"
+SANDBOX_CONFIG_NAME="$(sandbox_config_name "${SANDBOX_CLASS_NAME}")"
+WORKERPOOL_NAME="pi-workerpool-${SANDBOX_CLASS_NAME}"
 WORKER_IMAGE="${WORKER_IMAGE:-}"
 IDLE_SECONDS="${IDLE_SECONDS:-60}"
-GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-pi-gateway}"
-GATEWAY_NAME="${GATEWAY_NAME:-pi-gateway}"
-GATEWAY_EGRESS_CONFIGMAP="${GATEWAY_EGRESS_CONFIGMAP:-pi-gateway-egress}"
-SUBSTRATE_NAMESPACE="${SUBSTRATE_NAMESPACE:-ate-system}"
 REGISTRY="${REGISTRY:-localhost:5001}"
-GATEWAY_IMAGE="${GATEWAY_IMAGE:-${REGISTRY}/pi-gateway:local}"
+GATEWAY_IMAGE="${REGISTRY}/pi-gateway:local"
+GATEWAY_NAMESPACE=pi-gateway
+GATEWAY_NAME=pi-gateway
+GATEWAY_EGRESS_CONFIGMAP=pi-gateway-egress
+SUBSTRATE_NAMESPACE=ate-system
+SECRET_NAME=pi-provider
+EGRESS_POLICY=deploy/local/egress-policy.yaml.tmpl
 
 kube=(kubectl --context "${KUBE_CONTEXT}")
 ate=("${KUBECTL_ATE}" --context "${KUBE_CONTEXT}")
@@ -94,11 +66,10 @@ need node
 need envsubst
 need "${KUBECTL_ATE}"
 
-KUBECTL_ATE_BIN="${KUBECTL_ATE_BIN:-$(command -v "${KUBECTL_ATE}")}"
 ate_version="$("${KUBECTL_ATE}" --version 2>&1 || true)"
 if [[ "${ate_version}" != *"v${SUBSTRATE_VERSION}"* && "${ate_version}" != *"(devel)"* ]]; then
   echo "kubectl-ate is not v${SUBSTRATE_VERSION}: ${ate_version}" >&2
-  echo "install the release binary, or set KUBECTL_ATE/KUBECTL_ATE_BIN" >&2
+  echo "install the release binary, or set KUBECTL_ATE" >&2
   exit 1
 fi
 
@@ -162,7 +133,7 @@ ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 
 echo "==> building and pushing the gateway image"
 mkdir -p bin
-cp "${KUBECTL_ATE_BIN}" bin/kubectl-ate
+cp "$(command -v "${KUBECTL_ATE}")" bin/kubectl-ate
 docker build -t "${GATEWAY_IMAGE}" -f images/gateway/Dockerfile .
 docker push "${GATEWAY_IMAGE}"
 
@@ -194,9 +165,9 @@ read -r inferred_host inferred_port < <(node -e '
   const url = new URL(process.argv[1]);
   process.stdout.write(`${url.hostname} ${url.port || (url.protocol === "https:" ? 443 : 80)}\n`);
 ' "${PI_PROVIDER_BASE_URL}")
-PROVIDER_HOST="${PROVIDER_HOST:-${inferred_host}}"
-PROVIDER_PORT="${PROVIDER_PORT:-${inferred_port}}"
-CREDENTIAL_URI="${CREDENTIAL_URI:-ate-secret://k8s.io/default/${ATESPACE}/${SECRET_NAME}/api-key}"
+PROVIDER_HOST="${inferred_host}"
+PROVIDER_PORT="${inferred_port}"
+CREDENTIAL_URI="ate-secret://k8s.io/default/${ATESPACE}/${SECRET_NAME}/api-key"
 RENDERED_POLICY=bin/egress-policy.yaml
 echo "==> rendering the egress policy for ${PROVIDER_HOST}"
 sed -e "s#\${PROVIDER_HOST}#${PROVIDER_HOST}#" \
@@ -267,41 +238,6 @@ if ! printf '%s' "${tag}" | grep -qE '[0-9a-f]{8}-'; then
   exit 1
 fi
 
-echo "==> creating actor ${ATESPACE}/${ACTOR}"
-actor_error="$("${ate[@]}" create actor "${ACTOR}" -a "${ATESPACE}" --template "${ACTOR_TEMPLATE}" 2>&1)" || {
-  if ! printf '%s' "${actor_error}" | grep -q "AlreadyExists"; then
-    echo "${actor_error}" >&2
-    exit 1
-  fi
-}
-
-# The policy is replaced rather than created so a re-run after editing the
-# template takes effect on the actor that already exists. An update needs the
-# uid and version of the stored policy as preconditions, and those are the
-# fields the API prints back. A missing policy still exits 0 here, so the
-# emptiness of the uid is what says whether there is one.
-existing_policy="$("${ate[@]}" get egress-policy "${ACTOR}" -a "${ATESPACE}" -o json 2>/dev/null || true)"
-precondition_uid="$(printf '%s' "${existing_policy}" | node -e '
-  let b = "";
-  process.stdin.on("data", (c) => (b += c)).on("end", () => {
-    try {
-      process.stdout.write(JSON.parse(b).metadata?.uid ?? "");
-    } catch {
-      process.stdout.write("");
-    }
-  });')"
-if [[ -n "${precondition_uid}" ]]; then
-  precondition_version="$(printf '%s' "${existing_policy}" | node -e 'let b="";process.stdin.on("data",(c)=>b+=c).on("end",()=>process.stdout.write(String(JSON.parse(b).metadata.version)))')"
-  {
-    printf 'metadata:\n  atespace: %s\n  name: default\n  uid: %s\n  version: "%s"\n' \
-      "${ATESPACE}" "${precondition_uid}" "${precondition_version}"
-    sed -n '/^rules:/,$p' "${RENDERED_POLICY}"
-  } > bin/egress-policy-update.yaml
-  "${ate[@]}" update egress-policy "${ACTOR}" -a "${ATESPACE}" -f bin/egress-policy-update.yaml
-else
-  "${ate[@]}" create egress-policy "${ACTOR}" -a "${ATESPACE}" -f "${RENDERED_POLICY}"
-fi
-
 gateway_spiffe="spiffe://cluster.local/ns/${GATEWAY_NAMESPACE}/sa/pi-gateway"
 if ! "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get deploy atenet-router -o yaml 2>/dev/null | grep -q "${gateway_spiffe}"; then
   echo "atenet-router does not allow ${gateway_spiffe}" >&2
@@ -334,7 +270,7 @@ Reach the gateway API from this machine:
   kubectl --context ${KUBE_CONTEXT} -n ${GATEWAY_NAMESPACE} port-forward svc/${GATEWAY_NAME} 8788:8788 &
   curl -s -X POST http://127.0.0.1:8788/messages \\
     -H 'content-type: application/json' \\
-    -d '{"conversation":"${CONVERSATION}","text":"hello"}'
+    -d '{"conversation":"local/chat","text":"hello"}'
 
 The gateway reaches actors through atenet-router over wss, creates the actor
 on first use, and suspends it ${IDLE_SECONDS}s after the last turn.

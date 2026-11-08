@@ -48,17 +48,10 @@ worker_image_for() { # <sandbox-class>
 # PI_PROVIDER_BASE_URL, PI_PROVIDER_API, PI_MODEL_CONTEXT_WINDOW,
 # PI_MODEL_MAX_TOKENS, SANDBOX_CLASS_NAME, ACTOR_TEMPLATE, and ATESPACE.
 render_actor_template() { # <out> <actor-image>
-	local out="$1" image="$2"
-	sed -e "s#\${ACTOR_IMAGE}#${image}#" \
-	    -e "s#\${PROVIDER}#${PI_PROVIDER}#" \
-	    -e "s#\${MODEL_ID}#${PI_MODEL}#" \
-	    -e "s#\${BASE_URL}#${PI_PROVIDER_BASE_URL}#" \
-	    -e "s#\${API}#${PI_PROVIDER_API}#" \
-	    -e "s#\${CONTEXT_WINDOW}#${PI_MODEL_CONTEXT_WINDOW:-}#" \
-	    -e "s#\${MAX_TOKENS}#${PI_MODEL_MAX_TOKENS:-}#" \
-	    -e "s#\${SANDBOX_CLASS_NAME}#${SANDBOX_CLASS_NAME}#" \
-	    deploy/e2e/actor-template.json.tmpl > "${out}"
-	sed -i.bak -e "s#^  name: pi-actor\$#  name: ${ACTOR_TEMPLATE}#" \
-	    -e "s#^  atespace: pi-agents\$#  atespace: ${ATESPACE}#" "${out}"
-	rm -f "${out}.bak"
+	ACTOR_IMAGE="$2" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" ATESPACE="${ATESPACE}" \
+	PROVIDER="${PI_PROVIDER}" MODEL_ID="${PI_MODEL}" BASE_URL="${PI_PROVIDER_BASE_URL}" \
+	API="${PI_PROVIDER_API}" CONTEXT_WINDOW="${PI_MODEL_CONTEXT_WINDOW:-}" \
+	MAX_TOKENS="${PI_MODEL_MAX_TOKENS:-}" SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" \
+	envsubst '${ACTOR_IMAGE} ${ACTOR_TEMPLATE} ${ATESPACE} ${PROVIDER} ${MODEL_ID} ${BASE_URL} ${API} ${CONTEXT_WINDOW} ${MAX_TOKENS} ${SANDBOX_CLASS_NAME}' \
+	< deploy/e2e/actor-template.json.tmpl > "$1"
 }

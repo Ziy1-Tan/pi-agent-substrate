@@ -62,6 +62,9 @@ function positiveNumber(value: string | undefined): number | undefined {
 const bridge = await startBridge({
 	piArgs: ["--provider", providerId, "--model", modelId],
 	sessionDir: SESSION_DIR,
+	// Pi reads models.json from this directory; its default is a home
+	// directory the actor does not have.
+	piEnv: { PI_CODING_AGENT_DIR: AGENT_DIR },
 	// One conversation per actor, so a restarted Pi child continues the same
 	// session instead of starting a new one.
 	sessionId: "pi",

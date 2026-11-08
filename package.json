@@ -12,8 +12,9 @@
 	"substrateVersion": "1.0.0",
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
+		"clean": "rm -rf dist",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "npm run build && NODE_ENV=test node --test dist/test/gateway-lifecycle.test.js dist/test/idle-lifecycle.test.js dist/test/bridge-lines.test.js dist/test/bridge.test.js dist/test/bridge-e2e.test.js dist/test/actor-transport.test.js dist/test/manager.test.js dist/test/metrics.test.js dist/test/entry-points.test.js"
+		"test": "npm run clean && npm run build && NODE_ENV=test node --test dist/test/*.test.js"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",

@@ -16,15 +16,6 @@
 #                     pi-actor template so the two cannot be mixed up)
 #   ATESPACE          atespace (default: pi-agents)
 #   IDLE_SECONDS      idle window for the automatic-suspend e2e (default: 15)
-#   HTTP_PORT         port for the HTTP-channel e2e (default: 8899)
-#   CONVERSATIONS     two conversation ids for that e2e (default: web/alpha,web/beta)
-#   PROVIDER          "mock" (default) or a real provider id; a real provider
-#                     also needs the PI_PROVIDER_* values below and an egress
-#                     policy that reaches it
-#   PI_MODEL          model id for a real provider
-#   PI_PROVIDER_BASE_URL / PI_PROVIDER_API
-#                     endpoint and wire protocol for a real provider
-#   EGRESS_POLICY     manifest applied to the actor (default: the mock policy)
 #   SANDBOX_CLASS_NAME  gvisor (default) or microvm
 #   SANDBOX_CONFIG_NAME SandboxConfig name (default: gvisor-default or microvm)
 #   WORKER_IMAGE      worker image (default: copy an existing pool of the class)
@@ -44,8 +35,7 @@ ACTOR_TEMPLATE="${ACTOR_TEMPLATE:-pi-e2e}"
 IDLE_SECONDS="${IDLE_SECONDS:-15}"
 HTTP_PORT="${HTTP_PORT:-8899}"
 CONVERSATIONS="${CONVERSATIONS:-web/alpha,web/beta}"
-PROVIDER="${PROVIDER:-mock}"
-EGRESS_POLICY="${EGRESS_POLICY:-deploy/e2e/egress-policy.yaml}"
+EGRESS_POLICY=deploy/e2e/egress-policy.yaml
 SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME:-gvisor}"
 SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-$(sandbox_config_name "${SANDBOX_CLASS_NAME}")}"
 WORKERPOOL_NAME="${WORKERPOOL_NAME:-pi-workerpool}"
@@ -113,23 +103,14 @@ if [[ "${ONLY}" != "e2e" ]]; then
   ATESPACE="${ATESPACE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
     envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/e2e/mock-llm.yaml.tmpl | "${kube[@]}" apply -f -
 
-  if [[ "${PROVIDER}" == "mock" ]]; then
-    "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
-  fi
+  "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
   "${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=180s
 
   echo "==> creating the actor template"
-  if [[ "${PROVIDER}" == "mock" ]]; then
-    PI_PROVIDER=mock
-    PI_MODEL=mock-model
-    PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
-    PI_PROVIDER_API=openai-completions
-  else
-    PI_PROVIDER="${PI_PROVIDER:-${PROVIDER}}"
-    [[ -n "${PI_MODEL:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_MODEL" >&2; exit 1; }
-    [[ -n "${PI_PROVIDER_BASE_URL:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_PROVIDER_BASE_URL" >&2; exit 1; }
-    [[ -n "${PI_PROVIDER_API:-}" ]] || { echo "PROVIDER=${PROVIDER} needs PI_PROVIDER_API" >&2; exit 1; }
-  fi
+  PI_PROVIDER=mock
+  PI_MODEL=mock-model
+  PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
+  PI_PROVIDER_API=openai-completions
   render_actor_template bin/actor-template.json "${ACTOR_IMAGE}"
 
   # A template is immutable and the server refuses a create when one already

@@ -4,8 +4,10 @@
 # sandbox-class selector means creating a new template (and a new actor that
 # uses it).
 #
-# ${...} placeholders are filled by hack/e2e-kind.sh or hack/deploy-local.sh:
+# ${...} placeholders are filled by scripts/lib.sh render_actor_template:
 #   ACTOR_IMAGE        digest-pinned actor image in the local registry
+#   ACTOR_TEMPLATE     template name
+#   ATESPACE           atespace that holds the actor
 #   PROVIDER           provider id
 #   MODEL_ID           model id
 #   BASE_URL           provider endpoint
@@ -14,8 +16,8 @@
 #   MAX_TOKENS         model output limit
 #   SANDBOX_CLASS_NAME microvm or gvisor, matching the WorkerPool label
 metadata:
-  atespace: pi-agents
-  name: pi-actor
+  atespace: ${ATESPACE}
+  name: ${ACTOR_TEMPLATE}
 # v1.0.0 selects the sandbox class through the WorkerPool, not through a
 # template field. Match the label the pool carries so a cluster with both
 # classes places the actor deterministically.

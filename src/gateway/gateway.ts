@@ -1,15 +1,24 @@
+import { createHash } from "node:crypto";
+
 import type { ActorControl, ActorRef, EgressPolicyManifest } from "./ateapi.js";
 import { sendTurn, TurnError, type ActorEndpoint, type Reply } from "./turn.js";
 import { IdleLifecycle, type Clock, type IdleSnapshot } from "./idle.js";
 
-/** `local/chat` -> `pi-local-chat`. Stable, and legal as a Kubernetes name. */
+/**
+ * `local/chat` -> `pi-local-chat-<hash>`. The hash covers the whole id, so two
+ * ids that sanitize to the same text (`web/alpha` and `web-alpha`) still reach
+ * different actors, and a long id keeps its identity past the 40-char cut. The
+ * result is a legal Kubernetes name: lowercase alphanumerics and dashes,
+ * ending in the hex digest, at most 52 characters.
+ */
 export function actorNameFor(conversationId: string): string {
   const sanitized = conversationId
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
-  return `pi-${sanitized || "conversation"}`;
+  const digest = createHash("sha256").update(conversationId).digest("hex").slice(0, 8);
+  return `pi-${sanitized || "conversation"}-${digest}`;
 }
 
 export type Counter =

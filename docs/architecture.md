@@ -149,9 +149,10 @@ suspend/wake loop. The next turn's `connect()` is the only wake action.
 ### Conversation mapping
 
 One conversation maps to one actor, named deterministically from the
-conversation id (a legal Kubernetes name with a fixed `pi-` prefix). A missing
-actor is created from the golden template; templates are immutable, so a change
-needs a new name. Each conversation has its own actor.
+conversation id: `pi-` + the sanitized id + a digest of the full id. The digest
+keeps ids that sanitize alike (`web/alpha`, `web-alpha`) on different actors.
+A missing actor is created from the golden template; templates are immutable,
+so a change needs a new name. Each conversation has its own actor.
 
 ### Snapshot policy
 

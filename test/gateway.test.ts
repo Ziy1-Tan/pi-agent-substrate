@@ -5,11 +5,17 @@ import { actorNameFor, Gateway } from "../src/gateway/gateway.js";
 import { TurnError } from "../src/gateway/turn.js";
 import { echoTurn, FakeControl } from "./support/fakes.js";
 
-test("actor names are deterministic and legal", () => {
-  assert.equal(actorNameFor("local/chat"), "pi-local-chat");
-  assert.equal(actorNameFor("Team Alpha/General"), "pi-team-alpha-general");
-  assert.equal(actorNameFor("///"), "pi-conversation");
-  assert.ok(actorNameFor("x".repeat(100)).length <= 43);
+test("actor names are deterministic, legal, and collision-free", () => {
+  const name = actorNameFor("local/chat");
+  assert.match(name, /^pi-local-chat-[0-9a-f]{8}$/);
+  assert.equal(actorNameFor("local/chat"), name);
+  assert.match(actorNameFor("///"), /^pi-conversation-[0-9a-f]{8}$/);
+  assert.ok(actorNameFor("x".repeat(100)).length <= 63);
+
+  // Ids that sanitize to the same text must not share an actor.
+  assert.notEqual(actorNameFor("web/alpha"), actorNameFor("web-alpha"));
+  // An id cut at 40 characters must keep its identity.
+  assert.notEqual(actorNameFor("x".repeat(100)), actorNameFor(`${"x".repeat(99)}y`));
 });
 
 test("a conversation's actor is created, then given its egress policy, once", async (t) => {
@@ -25,7 +31,10 @@ test("a conversation's actor is created, then given its egress policy, once", as
 
   await Promise.all([gateway.receive("local/chat", "a"), gateway.receive("local/chat", "b")]);
   await gateway.receive("local/chat", "c");
-  assert.deepEqual(control.calls, ["ensure pi-local-chat", "egress pi-local-chat"]);
+  assert.deepEqual(control.calls, [
+    `ensure ${actorNameFor("local/chat")}`,
+    `egress ${actorNameFor("local/chat")}`,
+  ]);
 });
 
 test("each conversation gets its own actor", async (t) => {
@@ -44,7 +53,7 @@ test("each conversation gets its own actor", async (t) => {
 
   await gateway.receive("local/a", "hi");
   await gateway.receive("local/b", "hi");
-  assert.deepEqual(seen, ["pi-local-a", "pi-local-b"]);
+  assert.deepEqual(seen, [actorNameFor("local/a"), actorNameFor("local/b")]);
 });
 
 test("turns in one conversation run one at a time", async (t) => {
@@ -115,12 +124,15 @@ test("an actor deleted behind the gateway's back is recreated before the turn is
 
   await gateway.receive("local/chat", "first");
   present = false;
-  assert.equal((await gateway.receive("local/chat", "again")).text, "pi-local-chat: again");
+  assert.equal(
+    (await gateway.receive("local/chat", "again")).text,
+    `${actorNameFor("local/chat")}: again`,
+  );
   assert.deepEqual(control.calls, [
-    "ensure pi-local-chat",
-    "egress pi-local-chat",
-    "ensure pi-local-chat",
-    "egress pi-local-chat",
+    `ensure ${actorNameFor("local/chat")}`,
+    `egress ${actorNameFor("local/chat")}`,
+    `ensure ${actorNameFor("local/chat")}`,
+    `egress ${actorNameFor("local/chat")}`,
   ]);
   assert.equal(gateway.metrics().counters.actors_recreated, 1);
 });
@@ -141,7 +153,7 @@ test("a failure after the prompt was sent is not retried", async (t) => {
 
   await assert.rejects(gateway.receive("local/chat", "hi"), /closed during the turn/);
   assert.equal(attempts, 1, "the actor may already be running the turn");
-  assert.deepEqual(control.calls, ["ensure pi-local-chat"]);
+  assert.deepEqual(control.calls, [`ensure ${actorNameFor("local/chat")}`]);
 });
 
 test("metrics show each conversation's lifecycle state", async (t) => {
@@ -163,11 +175,11 @@ test("metrics show each conversation's lifecycle state", async (t) => {
   const first = gateway.receive("local/chat", "hi");
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(gateway.metrics().conversations, {
-    "local/chat": { actor: "pi-local-chat", state: "OPENING" },
+    "local/chat": { actor: actorNameFor("local/chat"), state: "OPENING" },
   });
   releaseEnsure();
   await first;
   assert.deepEqual(gateway.metrics().conversations, {
-    "local/chat": { actor: "pi-local-chat", state: "GRACE", inflight: 0 },
+    "local/chat": { actor: actorNameFor("local/chat"), state: "GRACE", inflight: 0 },
   });
 });

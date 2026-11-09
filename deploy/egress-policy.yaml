@@ -8,14 +8,14 @@ metadata:
   atespace: pi-agents
   name: default
 rules:
-- https:
-    hostnames:
-    - ${PROVIDER_HOST}
-    ports:
-      numbers:
-      - ${PROVIDER_PORT}
-    effects:
-      replaceHeaders:
-      - header: ${AUTH_HEADER}
-        prefix: "${AUTH_PREFIX}"
-        credentialUri: ${CREDENTIAL_URI}
+  - https:
+      hostnames:
+        - ${PROVIDER_HOST}
+      ports:
+        numbers:
+          - ${PROVIDER_PORT}
+      effects:
+        replaceHeaders:
+          - header: ${AUTH_HEADER}
+            prefix: "${AUTH_PREFIX}"
+            credentialUri: ${CREDENTIAL_URI}

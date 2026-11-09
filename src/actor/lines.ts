@@ -7,45 +7,45 @@
  * which also keeps multi-byte characters intact across chunk boundaries.
  */
 export class LineFramer {
-	private pending: Buffer = Buffer.alloc(0);
+  private pending: Buffer = Buffer.alloc(0);
 
-	push(chunk: Buffer | string): string[] {
-		const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
-		this.pending = this.pending.length === 0 ? bytes : Buffer.concat([this.pending, bytes]);
-		const lines: string[] = [];
-		let start = 0;
-		for (;;) {
-			const end = this.pending.indexOf(0x0a, start);
-			if (end === -1) break;
-			lines.push(decodeRecord(this.pending.subarray(start, end)));
-			start = end + 1;
-		}
-		this.pending = start === 0 ? this.pending : this.pending.subarray(start);
-		return lines;
-	}
+  push(chunk: Buffer | string): string[] {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+    this.pending = this.pending.length === 0 ? bytes : Buffer.concat([this.pending, bytes]);
+    const lines: string[] = [];
+    let start = 0;
+    for (;;) {
+      const end = this.pending.indexOf(0x0a, start);
+      if (end === -1) break;
+      lines.push(decodeRecord(this.pending.subarray(start, end)));
+      start = end + 1;
+    }
+    this.pending = start === 0 ? this.pending : this.pending.subarray(start);
+    return lines;
+  }
 
-	/** Returns whatever remains; only valid when the peer closed the stream. */
-	flush(): string | undefined {
-		if (this.pending.length === 0) return undefined;
-		const rest = decodeRecord(this.pending);
-		this.pending = Buffer.alloc(0);
-		return rest;
-	}
+  /** Returns whatever remains; only valid when the peer closed the stream. */
+  flush(): string | undefined {
+    if (this.pending.length === 0) return undefined;
+    const rest = decodeRecord(this.pending);
+    this.pending = Buffer.alloc(0);
+    return rest;
+  }
 }
 
 function decodeRecord(bytes: Buffer): string {
-	const text = bytes.toString("utf8");
-	return text.endsWith("\r") ? text.slice(0, -1) : text;
+  const text = bytes.toString("utf8");
+  return text.endsWith("\r") ? text.slice(0, -1) : text;
 }
 
 export function encodeRecord(value: unknown): string {
-	return `${JSON.stringify(value)}\n`;
+  return `${JSON.stringify(value)}\n`;
 }
 
 export function parseRecord(line: string): unknown {
-	try {
-		return JSON.parse(line) as unknown;
-	} catch {
-		return undefined;
-	}
+  try {
+    return JSON.parse(line) as unknown;
+  } catch {
+    return undefined;
+  }
 }

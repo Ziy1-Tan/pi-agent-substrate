@@ -6,37 +6,39 @@
  */
 
 export interface RpcCommand {
-	type: string;
-	id?: string;
-	[key: string]: unknown;
+  type: string;
+  id?: string;
+  [key: string]: unknown;
 }
 
-export function isRpcResponse(value: unknown): value is { type: "response"; command: string; success: boolean; data?: unknown } {
-	return isObject(value) && value.type === "response" && typeof value.command === "string";
+export function isRpcResponse(
+  value: unknown,
+): value is { type: "response"; command: string; success: boolean; data?: unknown } {
+  return isObject(value) && value.type === "response" && typeof value.command === "string";
 }
 
 export function isTextDelta(value: unknown): value is { assistantMessageEvent: { delta: string } } {
-	if (!isObject(value) || value.type !== "message_update") return false;
-	const event = value.assistantMessageEvent;
-	return isObject(event) && event.type === "text_delta" && typeof event.delta === "string";
+  if (!isObject(value) || value.type !== "message_update") return false;
+  const event = value.assistantMessageEvent;
+  return isObject(event) && event.type === "text_delta" && typeof event.delta === "string";
 }
 
 export function isAgentSettled(value: unknown): boolean {
-	return isObject(value) && value.type === "agent_settled";
+  return isObject(value) && value.type === "agent_settled";
 }
 
 /** The `message_end` of an assistant message, successful or not. */
 function assistantMessage(value: unknown): Record<string, any> | undefined {
-	if (!isObject(value) || value.type !== "message_end") return undefined;
-	const message = value.message;
-	return isObject(message) && message.role === "assistant" ? message : undefined;
+  if (!isObject(value) || value.type !== "message_end") return undefined;
+  const message = value.message;
+  return isObject(message) && message.role === "assistant" ? message : undefined;
 }
 
 export interface AssistantOutcome {
-	/** The text of the finished message; absent when it produced none. */
-	text?: string;
-	/** Why the turn failed; absent when the message ended normally. */
-	error?: string;
+  /** The text of the finished message; absent when it produced none. */
+  text?: string;
+  /** Why the turn failed; absent when the message ended normally. */
+  error?: string;
 }
 
 /**
@@ -47,17 +49,20 @@ export interface AssistantOutcome {
  * turn indistinguishable from one that produced no text.
  */
 export function assistantOutcome(value: unknown): AssistantOutcome | undefined {
-	const message = assistantMessage(value);
-	if (!message) return undefined;
-	const text = Array.isArray(message.content)
-		? message.content
-				.filter((block: unknown): block is { text: string } => isObject(block) && typeof block.text === "string")
-				.map((block: { text: string }) => block.text)
-				.join("")
-		: "";
-	const failure = typeof message.errorMessage === "string" ? message.errorMessage : "";
-	const error = message.stopReason === "error" ? failure || "the model request failed" : undefined;
-	return error === undefined ? { text } : { text: "", error };
+  const message = assistantMessage(value);
+  if (!message) return undefined;
+  const text = Array.isArray(message.content)
+    ? message.content
+        .filter(
+          (block: unknown): block is { text: string } =>
+            isObject(block) && typeof block.text === "string",
+        )
+        .map((block: { text: string }) => block.text)
+        .join("")
+    : "";
+  const failure = typeof message.errorMessage === "string" ? message.errorMessage : "";
+  const error = message.stopReason === "error" ? failure || "the model request failed" : undefined;
+  return error === undefined ? { text } : { text: "", error };
 }
 
 /**
@@ -67,11 +72,14 @@ export function assistantOutcome(value: unknown): AssistantOutcome | undefined {
  * answered at all.
  */
 export function retryFailure(value: unknown): string | undefined {
-	if (!isObject(value) || value.type !== "auto_retry_end" || value.success !== false) return undefined;
-	const text = value.finalError;
-	return typeof text === "string" && text.length > 0 ? text : "the model request failed after retries";
+  if (!isObject(value) || value.type !== "auto_retry_end" || value.success !== false)
+    return undefined;
+  const text = value.finalError;
+  return typeof text === "string" && text.length > 0
+    ? text
+    : "the model request failed after retries";
 }
 
 function isObject(value: unknown): value is Record<string, any> {
-	return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null;
 }

@@ -21,9 +21,9 @@ metadata:
 spec:
   replicas: 1
   sandboxClasses:
-  - name: ${SANDBOX_CLASS_NAME}
-    configRef:
-      name: ${SANDBOX_CONFIG_NAME}
+    - name: ${SANDBOX_CLASS_NAME}
+      configRef:
+        name: ${SANDBOX_CONFIG_NAME}
   template:
     resources:
       limits:

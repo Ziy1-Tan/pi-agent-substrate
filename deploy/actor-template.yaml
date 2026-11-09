@@ -25,48 +25,48 @@ metadata:
 workerSelector:
   matchLabels:
     workload: pi
-    sandboxClass: '${SANDBOX_CLASS_NAME}'
+    sandboxClass: "${SANDBOX_CLASS_NAME}"
 containers:
-- name: bridge
-  image: ${ACTOR_IMAGE}
-  env:
-  - name: PI_PROVIDER
-    value: '${PROVIDER}'
-  - name: PI_MODEL
-    value: '${MODEL_ID}'
-  # The bridge composes Pi's models.json from these values at startup. The API
-  # key is deliberately absent: Pi sends a placeholder Authorization header
-  # and the egress gateway replaces it.
-  - name: PI_PROVIDER_BASE_URL
-    value: '${BASE_URL}'
-  - name: PI_PROVIDER_API
-    value: '${API}'
-  - name: PI_MODEL_CONTEXT_WINDOW
-    value: '${CONTEXT_WINDOW}'
-  - name: PI_MODEL_MAX_TOKENS
-    value: '${MAX_TOKENS}'
-  # Actor egress only passes the urls an EgressPolicy allows; Pi's startup
-  # update and model-catalog checks would otherwise wait on a denied request.
-  - name: PI_OFFLINE
-    value: "1"
-  - name: PI_SKIP_VERSION_CHECK
-    value: "1"
-  # An `https` egress rule is terminated at the gateway, which mints the leaf
-  # the actor sees. That leaf chains to the substrate CA, not a public root,
-  # so Node rejects it unless the projected bundle is trusted. Without this
-  # Pi reports a bare "Connection error." after the TLS handshake.
-  - name: NODE_EXTRA_CA_CERTS
-    value: /run/ate/egress-trust-bundle/trust-bundle.pem
-  - name: SSL_CERT_FILE
-    value: /run/ate/egress-trust-bundle/trust-bundle.pem
-  # Deliberately no wakeupProbe: declaring one drops the controller's
-  # golden-snapshot warmup to zero, and this bridge answers /healthz before the
-  # state worth snapshotting exists. The incident is in AGENTS.md.
-  volumeMounts:
-  - name: workspace
-    mountPath: /workspace
-  - name: system-info
-    mountPath: /run/ate
+  - name: bridge
+    image: ${ACTOR_IMAGE}
+    env:
+      - name: PI_PROVIDER
+        value: "${PROVIDER}"
+      - name: PI_MODEL
+        value: "${MODEL_ID}"
+      # The bridge composes Pi's models.json from these values at startup. The API
+      # key is deliberately absent: Pi sends a placeholder Authorization header
+      # and the egress gateway replaces it.
+      - name: PI_PROVIDER_BASE_URL
+        value: "${BASE_URL}"
+      - name: PI_PROVIDER_API
+        value: "${API}"
+      - name: PI_MODEL_CONTEXT_WINDOW
+        value: "${CONTEXT_WINDOW}"
+      - name: PI_MODEL_MAX_TOKENS
+        value: "${MAX_TOKENS}"
+      # Actor egress only passes the urls an EgressPolicy allows; Pi's startup
+      # update and model-catalog checks would otherwise wait on a denied request.
+      - name: PI_OFFLINE
+        value: "1"
+      - name: PI_SKIP_VERSION_CHECK
+        value: "1"
+      # An `https` egress rule is terminated at the gateway, which mints the leaf
+      # the actor sees. That leaf chains to the substrate CA, not a public root,
+      # so Node rejects it unless the projected bundle is trusted. Without this
+      # Pi reports a bare "Connection error." after the TLS handshake.
+      - name: NODE_EXTRA_CA_CERTS
+        value: /run/ate/egress-trust-bundle/trust-bundle.pem
+      - name: SSL_CERT_FILE
+        value: /run/ate/egress-trust-bundle/trust-bundle.pem
+    # Deliberately no wakeupProbe: declaring one drops the controller's
+    # golden-snapshot warmup to zero, and this bridge answers /healthz before the
+    # state worth snapshotting exists. The incident is in AGENTS.md.
+    volumeMounts:
+      - name: workspace
+        mountPath: /workspace
+      - name: system-info
+        mountPath: /run/ate
 # v1.0.0 sizes the actor in integer units, not Kubernetes quantities.
 resources:
   limits:
@@ -80,15 +80,15 @@ snapshotConfig:
   # --snapshot-location unless the PerTemplateSnapshotLocation preview gate is
   # enabled and the client opts in with --preview.
 volumes:
-- name: workspace
-  durableDir: {}
-# Projected trust anchors: the egress gateway CA plus public roots. Substrate
-# only resolves these well-known bundle names.
-- name: system-info
-  systemInfo:
-    dataSources:
-    - trustBundle:
-        names:
-        - egress-mitm.ate.dev
-        - system-roots.ate.dev
-        path: egress-trust-bundle/trust-bundle.pem
+  - name: workspace
+    durableDir: {}
+  # Projected trust anchors: the egress gateway CA plus public roots. Substrate
+  # only resolves these well-known bundle names.
+  - name: system-info
+    systemInfo:
+      dataSources:
+        - trustBundle:
+            names:
+              - egress-mitm.ate.dev
+              - system-roots.ate.dev
+            path: egress-trust-bundle/trust-bundle.pem

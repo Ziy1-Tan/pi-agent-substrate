@@ -23,12 +23,12 @@ to no public root. Mount the projected bundle:
 
 ```yaml
 volumes:
-- name: system-info
-  systemInfo:
-    dataSources:
-    - trustBundle:
-        names: [egress-mitm.ate.dev, system-roots.ate.dev]
-        path: egress-trust-bundle/trust-bundle.pem
+  - name: system-info
+    systemInfo:
+      dataSources:
+        - trustBundle:
+            names: [egress-mitm.ate.dev, system-roots.ate.dev]
+            path: egress-trust-bundle/trust-bundle.pem
 ```
 
 and set `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` to

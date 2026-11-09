@@ -83,13 +83,13 @@ registry's `latest` tag; set `WORKER_IMAGE` to the release image, for example
 A single model call needs five values. They live in
 `deploy/provider.env`, which is gitignored:
 
-| Variable | Meaning |
-|---|---|
-| `PI_PROVIDER` | Provider id Pi passes as `--provider` |
-| `PI_MODEL` | Model id Pi passes as `--model` |
-| `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1` |
-| `PI_PROVIDER_API` | Wire protocol: `openai-completions` or `anthropic-messages` |
-| `PI_PROVIDER_API_KEY` | Key, written to a Kubernetes Secret and injected on egress |
+| Variable               | Meaning                                                     |
+| ---------------------- | ----------------------------------------------------------- |
+| `PI_PROVIDER`          | Provider id Pi passes as `--provider`                       |
+| `PI_MODEL`             | Model id Pi passes as `--model`                             |
+| `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1`                 |
+| `PI_PROVIDER_API`      | Wire protocol: `openai-completions` or `anthropic-messages` |
+| `PI_PROVIDER_API_KEY`  | Key, written to a Kubernetes Secret and injected on egress  |
 
 Pi defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
 `PI_MODEL_CONTEXT_WINDOW` or `PI_MODEL_MAX_TOKENS` only when the model differs.
@@ -120,12 +120,12 @@ in-cluster pod identity provides.
 
 ## Configuration
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `ATESPACE` | `pi-agents` | Atespace that holds the actors |
-| `ACTOR_TEMPLATE` | `pi-actor` | Template used to create a missing actor |
-| `EGRESS_POLICY` | `/etc/pi/egress-policy.yaml` | Applied to each new actor |
-| `IDLE_SECONDS` | `60` | Idle window before suspend; `0` disables it |
+| Variable         | Default                      | Meaning                                     |
+| ---------------- | ---------------------------- | ------------------------------------------- |
+| `ATESPACE`       | `pi-agents`                  | Atespace that holds the actors              |
+| `ACTOR_TEMPLATE` | `pi-actor`                   | Template used to create a missing actor     |
+| `EGRESS_POLICY`  | `/etc/pi/egress-policy.yaml` | Applied to each new actor                   |
+| `IDLE_SECONDS`   | `60`                         | Idle window before suspend; `0` disables it |
 
 The router URL and its client certificate are fixed by the Deployment: the
 gateway runs in the cluster and speaks to `atenet-router` with its projected

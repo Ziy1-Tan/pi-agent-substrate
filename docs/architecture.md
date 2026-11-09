@@ -20,12 +20,12 @@ and re-align state.
 
 ## Design
 
-| Layer | Role | Source |
-|---|---|---|
-| Channel | Where the human speaks | The HTTP adapter in `src/gateway/server.ts` |
-| Gateway | Turn relay and lifecycle decisions | `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
-| Platform | Scheduling, routing, snapshots, sandboxing | Substrate |
-| Runtime | Agent loop and tool execution | `pi --mode rpc`, inside the actor |
+| Layer    | Role                                       | Source                                                                                  |
+| -------- | ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Channel  | Where the human speaks                     | The HTTP adapter in `src/gateway/server.ts`                                             |
+| Gateway  | Turn relay and lifecycle decisions         | `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
+| Platform | Scheduling, routing, snapshots, sandboxing | Substrate                                                                               |
+| Runtime  | Agent loop and tool execution              | `pi --mode rpc`, inside the actor                                                       |
 
 Presence and cognition are separate concerns. The resident gateway is an
 ordinary process, not an actor and not in a WorkerPool; it answers HTTP
@@ -38,13 +38,13 @@ with no work in flight, the gateway suspends it again.
 
 ### State ownership
 
-| State | Where | Why |
-|---|---|---|
-| Provider secret | Kubernetes Secret | Injected on egress; must never enter a snapshot |
-| Turn in flight | Gateway memory | The reply is the HTTP response; nothing outlives the request |
-| memory, skills, code, session files | Actor's `/workspace` | Cognition layer; moves with the snapshot |
-| Process memory, the running turn | Actor | A MEMORY snapshot restores a warm process |
-| Placement, snapshot references, identity | Substrate | Platform responsibility |
+| State                                    | Where                | Why                                                          |
+| ---------------------------------------- | -------------------- | ------------------------------------------------------------ |
+| Provider secret                          | Kubernetes Secret    | Injected on egress; must never enter a snapshot              |
+| Turn in flight                           | Gateway memory       | The reply is the HTTP response; nothing outlives the request |
+| memory, skills, code, session files      | Actor's `/workspace` | Cognition layer; moves with the snapshot                     |
+| Process memory, the running turn         | Actor                | A MEMORY snapshot restores a warm process                    |
+| Placement, snapshot references, identity | Substrate            | Platform responsibility                                      |
 
 ### Goals
 

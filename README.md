@@ -112,7 +112,8 @@ curl -s localhost:8788/messages \
 # {"conversation":"local/chat","text":"..."}
 ```
 
-`GET /metrics` returns counters for turns, suspends, and resumed turns.
+`GET /metrics` returns counters for turns, resumed turns, suspends, suspend
+failures, and recreated actors, plus each conversation's lifecycle state.
 
 `deploy/local.sh` is the supported path. The gateway always reaches actors
 through atenet-router and needs the client certificate that only the

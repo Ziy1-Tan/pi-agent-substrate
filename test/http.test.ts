@@ -84,8 +84,7 @@ test("metrics are served and unknown paths are not", async (t) => {
   const { server } = await setup(t);
   const metrics = await fetch(`http://127.0.0.1:${server.port}/metrics`);
   assert.equal(metrics.status, 200);
-  const body = (await metrics.json()) as { counters: Record<string, number> };
-  assert.deepEqual(body.counters, {});
+  assert.deepEqual(await metrics.json(), { counters: {}, conversations: {} });
 
   const missing = await fetch(`http://127.0.0.1:${server.port}/`);
   assert.equal(missing.status, 404);

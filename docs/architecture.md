@@ -103,13 +103,19 @@ is what carries the conversation forward, not a gateway queue.
 ### Lifecycle state machine
 
 ```text
+OPENING --ensure + egress--> IDLE      (a failed open is forgotten; the next message retries)
 IDLE --prompt--> ACTIVE --turn settled--> GRACE
 GRACE --prompt--> ACTIVE
 GRACE --timeout with nothing in flight--> SUSPENDING
 SUSPENDING --done--> SUSPENDED
-SUSPENDED --prompt/attach--> RESUMING --ready--> ACTIVE
-ACTIVE/GRACE --actor crash--> CRASHED (requires revert or recreate)
+SUSPENDING --failed--> GRACE            (the idle window restarts)
+SUSPENDED/SUSPENDING --prompt--> ACTIVE (the router resumes the actor on connect)
 ```
+
+`GET /metrics` reports each conversation's state, its in-flight count, and the
+last suspend error. These are the gateway's own states; `SUSPENDED` means the
+gateway asked for a suspend, and ate-api's `RESUMING` or `CRASHED` are not
+tracked here.
 
 - Only a settled turn permits entry to `GRACE`; an arriving prompt cancels the
   timer immediately.
@@ -120,9 +126,21 @@ ACTIVE/GRACE --actor crash--> CRASHED (requires revert or recreate)
   count never returns to zero and the actor never suspends again.
 - A prompt during `SUSPENDING` is left to the router's resume; no second
   suspend, and a late suspend result must not write `SUSPENDED` back.
-- A failed suspend falls back to `GRACE` and restarts the idle window.
-- An actor crash does not retry the turn. Session files stay; revert is the
-  user's or the policy's decision.
+
+### Turn phases
+
+A turn is in `connect` until the WebSocket opens and in `turn` after the prompt
+is sent. A failure carries its phase and, when the router refused the
+upgrade, the router's status and reason (`router answered 404: actor
+pi-agents/pi-x not found`), which the HTTP entry point returns in its 502.
+
+Only one failure is retried. A 404 in `connect` means the actor was deleted
+after the conversation opened; the prompt never left the gateway, so the
+gateway recreates the actor, reapplies its egress policy, and sends the turn
+once more. The recreated actor starts with no history, and `actors_recreated`
+counts it. A failure in `turn` is never retried, because the actor may already
+be running the prompt. A crashed actor surfaces as the router's 503 and is left
+to the operator.
 
 Connecting wakes the actor, so the transport must not reconnect on its own: a
 reconnect after a suspend would wake the actor immediately and produce a

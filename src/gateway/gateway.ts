@@ -1,6 +1,6 @@
 import type { ActorControl, ActorRef, EgressPolicyManifest } from "./ateapi.js";
-import { sendTurn, type ActorEndpoint, type Reply } from "./turn.js";
-import { IdleLifecycle, type Clock } from "./idle.js";
+import { sendTurn, TurnError, type ActorEndpoint, type Reply } from "./turn.js";
+import { IdleLifecycle, type Clock, type IdleSnapshot } from "./idle.js";
 
 /** `local/chat` -> `pi-local-chat`. Stable, and legal as a Kubernetes name. */
 export function actorNameFor(conversationId: string): string {
@@ -12,7 +12,22 @@ export function actorNameFor(conversationId: string): string {
   return `pi-${sanitized || "conversation"}`;
 }
 
-export type Counter = "turns" | "resumed_turns" | "suspends" | "suspend_failures";
+export type Counter =
+  | "turns"
+  | "resumed_turns"
+  | "suspends"
+  | "suspend_failures"
+  | "actors_recreated";
+
+/** One conversation as `/metrics` reports it. `OPENING` covers ensure and egress. */
+export type ConversationSnapshot =
+  | { actor: string; state: "OPENING" }
+  | ({ actor: string } & IdleSnapshot);
+
+export interface GatewayMetrics {
+  counters: Partial<Record<Counter, number>>;
+  conversations: Record<string, ConversationSnapshot>;
+}
 
 export type TurnRunner = (actor: ActorRef, prompt: string) => Promise<Reply>;
 
@@ -32,6 +47,7 @@ export interface GatewayOptions {
 }
 
 interface Conversation {
+  id: string;
   actor: ActorRef;
   lifecycle: IdleLifecycle;
   /** Turns within one conversation run one at a time. */
@@ -47,7 +63,9 @@ export class Gateway {
   private readonly options: GatewayOptions;
   private readonly runTurn: TurnRunner;
   private readonly counters = new Map<Counter, number>();
+  /** A pending entry is still opening; a failed open is removed, so the next message retries it. */
   private readonly conversations = new Map<string, Promise<Conversation>>();
+  private readonly opened = new Map<string, Conversation>();
 
   constructor(options: GatewayOptions) {
     this.options = options;
@@ -68,14 +86,23 @@ export class Gateway {
     return run;
   }
 
-  /** Counter snapshot for `/metrics`. */
-  metrics(): { counters: Partial<Record<Counter, number>> } {
-    return { counters: Object.fromEntries(this.counters) };
+  /** Counters and each conversation's lifecycle, for `/metrics`. */
+  metrics(): GatewayMetrics {
+    const conversations: Record<string, ConversationSnapshot> = {};
+    for (const id of this.conversations.keys()) {
+      const open = this.opened.get(id);
+      const actor = open ? open.actor.name : actorNameFor(id);
+      conversations[id] = open
+        ? { actor, ...open.lifecycle.snapshot() }
+        : { actor, state: "OPENING" };
+    }
+    return { counters: Object.fromEntries(this.counters), conversations };
   }
 
   async close(): Promise<void> {
     const opened = await Promise.allSettled(this.conversations.values());
     this.conversations.clear();
+    this.opened.clear();
     for (const entry of opened) {
       if (entry.status !== "fulfilled") continue;
       await entry.value.tail;
@@ -85,16 +112,36 @@ export class Gateway {
 
   private async turn(conversation: Conversation, prompt: string): Promise<Reply> {
     const { lifecycle } = conversation;
-    const resumed = lifecycle.state === "SUSPENDED" || lifecycle.state === "SUSPENDING";
-    lifecycle.turnStarted();
+    const resumed = lifecycle.turnStarted();
     try {
-      return await this.runTurn(conversation.actor, prompt);
+      return await this.runTurnOnce(conversation, prompt);
     } finally {
       // Settle even on failure, or the in-flight count never drops and the
       // actor is never suspended again.
       lifecycle.turnSettled();
       this.count("turns");
       if (resumed) this.count("resumed_turns");
+    }
+  }
+
+  /**
+   * The gateway believes the actor exists once the conversation opens. If it
+   * was deleted since, the router refuses the connection with a 404 before
+   * the prompt leaves the gateway, so recreating the actor and sending again
+   * cannot run the turn twice. The recreated actor starts with no history.
+   */
+  private async runTurnOnce(conversation: Conversation, prompt: string): Promise<Reply> {
+    try {
+      return await this.runTurn(conversation.actor, prompt);
+    } catch (error) {
+      if (!(error instanceof TurnError && error.phase === "connect" && error.status === 404))
+        throw error;
+      this.options.log?.(
+        `[${conversation.id}] ${conversation.actor.name} is gone; recreating it with no history`,
+      );
+      await this.provision(conversation.actor);
+      this.count("actors_recreated");
+      return await this.runTurn(conversation.actor, prompt);
     }
   }
 
@@ -105,15 +152,17 @@ export class Gateway {
     const opening = this.create(conversationId);
     this.conversations.set(conversationId, opening);
     // A failed open is forgotten, so the next message retries it.
-    opening.catch(() => this.conversations.delete(conversationId));
+    opening.then(
+      (conversation) => this.opened.set(conversationId, conversation),
+      () => this.conversations.delete(conversationId),
+    );
     return opening;
   }
 
   private async create(conversationId: string): Promise<Conversation> {
-    const { control, egressPolicy, log } = this.options;
+    const { control, log } = this.options;
     const actor: ActorRef = { atespace: this.options.atespace, name: actorNameFor(conversationId) };
-    await control.ensure(actor);
-    if (egressPolicy) await control.applyEgress(actor, egressPolicy);
+    await this.provision(actor);
     log?.(`opened ${conversationId} on ${actor.atespace}/${actor.name}`);
     const lifecycle = new IdleLifecycle({
       actor,
@@ -123,7 +172,14 @@ export class Gateway {
       count: (name) => this.count(name),
       log: (message) => log?.(`[${conversationId}] ${message}`),
     });
-    return { actor, lifecycle, tail: Promise.resolve() };
+    return { id: conversationId, actor, lifecycle, tail: Promise.resolve() };
+  }
+
+  /** Without its egress policy an actor's turns settle with no text, so both happen together. */
+  private async provision(actor: ActorRef): Promise<void> {
+    const { control, egressPolicy } = this.options;
+    await control.ensure(actor);
+    if (egressPolicy) await control.applyEgress(actor, egressPolicy);
   }
 
   private count(name: Counter): void {

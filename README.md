@@ -13,7 +13,7 @@ curl POST /messages
    gateway (always on)          ← HTTP entry, idle policy
         │
         ▼
-   Substrate actor (sleeps)     ← pi --mode rpc, /workspace, session files
+   Substrate actor (sleeps)     ← pi-durable Harness, /workspace, JSONL log
         │
         ▼
    model provider
@@ -83,21 +83,22 @@ registry's `latest` tag; set `WORKER_IMAGE` to the release image, for example
 A single model call needs five values. They live in
 `deploy/provider.env`, which is gitignored:
 
-| Variable               | Meaning                                                     |
-| ---------------------- | ----------------------------------------------------------- |
-| `PI_PROVIDER`          | Provider id Pi passes as `--provider`                       |
-| `PI_MODEL`             | Model id Pi passes as `--model`                             |
-| `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1`                 |
-| `PI_PROVIDER_API`      | Wire protocol: `openai-completions` or `anthropic-messages` |
-| `PI_PROVIDER_API_KEY`  | Key, written to a Kubernetes Secret and injected on egress  |
+| Variable               | Meaning                                                    |
+| ---------------------- | ---------------------------------------------------------- |
+| `PI_PROVIDER`          | Provider id the Harness registers                          |
+| `PI_MODEL`             | Model id the Harness calls                                 |
+| `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1`                |
+| `PI_PROVIDER_API`      | Wire protocol; only `openai-completions` is supported      |
+| `PI_PROVIDER_API_KEY`  | Key, written to a Kubernetes Secret and injected on egress |
 
-Pi defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
+The actor defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
 `PI_MODEL_CONTEXT_WINDOW` or `PI_MODEL_MAX_TOKENS` only when the model differs.
+`PI_TOOLS=bash` gives the agent a shell in `/workspace`; the default is no tools.
 
 The endpoint and API go into the actor template. The key does not: the actor
 sends a placeholder header, which the EgressPolicy replaces with the value
-from the Secret. The header follows the wire API: `Authorization: Bearer` for
-OpenAI-compatible endpoints, `x-api-key` for Anthropic-compatible ones.
+from the Secret. With `openai-completions` that header is
+`Authorization: Bearer`.
 
 ### Talk to it
 
@@ -146,7 +147,5 @@ npm install
 npm test
 ```
 
-The bridge tests start the real `pi` binary. They look for it next to the Node
-executable and fall back to `PI_BIN`, so install the version in
-`package.json`'s `piVersion` in that location, or point `PI_BIN` at it. A
-newer global `pi` speaks a different RPC dialect and the tests hang.
+The bridge tests run the pi-durable Harness in-process against a local mock
+model, so they need no `pi` binary. Node 22.19 or newer is required.

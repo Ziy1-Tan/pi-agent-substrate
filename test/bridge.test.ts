@@ -98,3 +98,26 @@ test("a provider failure is reported as an error, not an empty reply", async (t)
   assert.equal(result.text, "");
   assert.match(String(result.error), /upstream is down/);
 });
+
+test("the shell tool is offered to the model only when enabled", async (t) => {
+  const off = await createBridgeHarness("ok");
+  t.after(() => off.close());
+  const offClient = await off.open();
+  t.after(() => offClient.close());
+  await offClient.request({ id: "off-1", type: "prompt", message: "hi" });
+  await offClient.waitFor((event) => event.type === "agent_settled");
+  assert.equal(off.llm.requests.at(-1)?.tools, undefined, "no tools are offered by default");
+
+  const on = await createBridgeHarness("ok", { tools: "bash" });
+  t.after(() => on.close());
+  const onClient = await on.open();
+  t.after(() => onClient.close());
+  await onClient.request({ id: "on-1", type: "prompt", message: "hi" });
+  await onClient.waitFor((event) => event.type === "agent_settled");
+  const tools = (on.llm.requests.at(-1)?.tools ?? []) as Array<{ function?: { name?: string } }>;
+  assert.deepEqual(
+    tools.map((tool) => tool.function?.name),
+    ["bash"],
+    "the bash tool is the only tool offered",
+  );
+});

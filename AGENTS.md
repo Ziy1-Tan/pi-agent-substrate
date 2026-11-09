@@ -42,8 +42,8 @@ deploy/atenet-egress -c ext-proc`.
 
 Pi sends the key in the header its wire API uses. OpenAI-compatible APIs send
 `Authorization: Bearer <apiKey>`; Anthropic-compatible APIs send
-`x-api-key: <apiKey>`. `models.json` carries a placeholder and the policy
-replaces that header:
+`x-api-key: <apiKey>`. The actor reads the placeholder from the variable named
+by `PI_PROVIDER_API_KEY_ENV`, and the policy replaces that header:
 
 ```yaml
 # openai-completions / openai-responses
@@ -155,8 +155,9 @@ with `success: false` and `finalError`. Without both, a failed turn looks like
 one that produced no text. The bridge sends `bridge_result` before Pi's own
 `agent_settled`, because the gateway settles on the first record it sees.
 
-Pi retries with a 2s/4s/8s backoff; set `{"retry":{"enabled":false}}` in a
-test agent's `settings.json` or a one-second injected failure takes fourteen.
+The bridge turns retries off (`settings.retry.enabled: false`) so a failure
+reaches the gateway at once. A test that exercises retries must enable them, or
+pick a timeout that allows for the backoff.
 
 ## In-cluster gateway
 
@@ -185,8 +186,8 @@ every connect so a rotated credential is picked up.
 atespace, the WorkerPool, the template (`pi-local-v1-0-0` by default), the
 provider Secret, the atespace's credential-provider grant, and the in-cluster
 gateway. The provider values come from `deploy/provider.env`; the key
-goes to a Secret and never enters the actor. The bridge composes Pi's
-`models.json` from the non-secret values.
+goes to a Secret and never enters the actor. The bridge builds the Harness
+from the non-secret values.
 
 The gateway creates the actor on the first message, named from the
 conversation id (`local/chat` → `pi-local-chat`). `ACTOR_TEMPLATE` defaults

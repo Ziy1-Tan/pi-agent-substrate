@@ -6,9 +6,10 @@ import test, { type TestContext } from "node:test";
 
 import { PiBackend } from "../src/gateway/backend.js";
 import { startBridge, type Bridge } from "../src/actor/bridge.js";
+import { providerFromEnv } from "../src/actor/provider.js";
 import { Conversation } from "../src/gateway/manager.js";
 import { WebSocketTransport } from "../src/gateway/websocket.js";
-import { resolvePiBin, startMockLlm, writePiConfig } from "./support/bridge-harness.js";
+import { mockProviderEnv, startMockLlm } from "./support/bridge-harness.js";
 
 interface E2EHarness {
   gateway: Conversation;
@@ -22,20 +23,19 @@ interface E2EHarness {
 async function createE2E(t: TestContext, text: string): Promise<E2EHarness> {
   const root = await mkdtemp(join(tmpdir(), "pi-e2e-"));
   const llm = await startMockLlm(text);
-  const agentDir = join(root, "agent");
   const workspace = join(root, "workspace");
-  await writePiConfig(agentDir, llm.url);
   // One port for the conversation: a resume puts a new process on it.
   const port = 18_700 + Math.floor(Math.random() * 200);
 
   let bridge: Bridge | undefined;
+  const env = mockProviderEnv(llm.url);
   const startActor = async () => {
     bridge = await startBridge({
-      piCommand: resolvePiBin(),
-      piArgs: ["--provider", "mock", "--model", "mock-model", "--no-tools"],
-      sessionDir: join(workspace, "sessions"),
-      piEnv: { PI_CODING_AGENT_DIR: agentDir },
       port,
+      storageDir: join(workspace, "durable"),
+      workspace,
+      provider: providerFromEnv(env),
+      env,
       log: process.env.PI_E2E_LOG
         ? (message) => console.error(`[bridge] ${message}`)
         : () => undefined,

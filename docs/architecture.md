@@ -1,7 +1,7 @@
 # Always-on Pi agents on Agent Substrate
 
 Combine always-on-agent's idle suspension policy with Substrate's suspendable
-actors to run `pi --mode rpc` inside an actor: a Pi agent that stays reachable
+actors to run a pi-durable Harness inside an actor: a Pi agent that stays reachable
 but only computes on demand.
 
 ## Problem
@@ -25,13 +25,13 @@ and re-align state.
 | Channel  | Where the human speaks                     | The HTTP adapter in `src/gateway/server.ts`                                             |
 | Gateway  | Turn relay and lifecycle decisions         | `src/gateway/substrate/` follows always-on-agent's provisioner and idle-suspender split |
 | Platform | Scheduling, routing, snapshots, sandboxing | Substrate                                                                               |
-| Runtime  | Agent loop and tool execution              | `pi --mode rpc`, inside the actor                                                       |
+| Runtime  | Agent loop and tool execution              | pi-durable Harness, in-process in the actor                                             |
 
 Presence and cognition are separate concerns. The resident gateway is an
 ordinary process, not an actor and not in a WorkerPool; it answers HTTP
 requests and maps a conversation id to an actor. The local deployment runs it
 as a Deployment in the cluster next to the workers. Each conversation has its
-own actor, which runs `pi --mode rpc` and holds `/workspace`, the session
+own actor, which runs the Harness and holds `/workspace`, the session
 files, and the process state. A message is forwarded to the actor, which the
 router resumes if it was suspended; after `agent_settled` and an idle window
 with no work in flight, the gateway suspends it again.
@@ -64,7 +64,7 @@ WebSocket, and owns the idle lifecycle. Everything it asks of Substrate —
 create, suspend, apply egress — goes through one control interface.
 
 The actor image is a WebSocket-to-stdio bridge in front of
-`pi --mode rpc --session-dir /workspace/.pi`, on a pinned Node base image, with
+the Harness over JSONL storage in `/workspace/.pi-durable`, on a pinned Node base image, with
 `/workspace` declared as a durableDir for memory, skills, code, and session
 files.
 
@@ -145,11 +145,10 @@ needs a new name. Each conversation has its own actor.
 
 MEMORY (the default) captures process memory, rootfs changes, and durable data,
 so a restore yields a warm process. DATA plus session files is smaller and
-survives runtime changes, but restores cold and must continue via `--session-id`
-or `--continue`. Either way the session files under `/workspace` must stay
-readable, and the gateway never depends on memory captured in a snapshot. Since
-the Pi child may be dead after a restore, the bridge starts it lazily and
-restarts it on the same `--session-id` when a client connects.
+survives runtime changes, but restores cold. Either way the JSONL storage under
+`/workspace/.pi-durable` must stay readable, and the gateway never depends on
+memory captured in a snapshot. After a restore the bridge opens the Harness over
+that storage again; the Harness adopts any unfinished work from the log.
 
 ### Error propagation
 

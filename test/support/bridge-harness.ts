@@ -1,11 +1,12 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import WebSocket from "ws";
 
 import { startBridge, type Bridge } from "../../src/actor/bridge.js";
+import { providerFromEnv } from "../../src/actor/provider.js";
 
 /**
  * A minimal OpenAI-compatible chat server for the bridge tests. It streams a
@@ -85,32 +86,6 @@ export async function startMockLlm(text: string): Promise<{
   };
 }
 
-export async function writePiConfig(agentDir: string, baseUrl: string): Promise<void> {
-  await mkdir(agentDir, { recursive: true });
-  // Retry is on by default with a 2s/4s/8s backoff. That is the right
-  // behaviour in production, but it makes a failure-injection test sit for
-  // 14 seconds; the bridge is what is under test here, not Pi's backoff.
-  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-  await writeFile(
-    join(agentDir, "models.json"),
-    JSON.stringify({
-      providers: {
-        mock: {
-          baseUrl,
-          api: "openai-completions",
-          apiKey: "mock-key",
-          compat: {
-            supportsDeveloperRole: false,
-            supportsReasoningEffort: false,
-            supportsUsageInStreaming: false,
-          },
-          models: [{ id: "mock-model", name: "mock", contextWindow: 100000, maxTokens: 4096 }],
-        },
-      },
-    }),
-  );
-}
-
 export interface BridgeHarness {
   bridge: Bridge;
   llm: Awaited<ReturnType<typeof startMockLlm>>;
@@ -120,21 +95,21 @@ export interface BridgeHarness {
 
 export async function createBridgeHarness(
   text = "Hello from pi rpc.",
-  log?: (message: string) => void,
+  options: { log?: (message: string) => void; tools?: "none" | "bash" } = {},
 ): Promise<BridgeHarness> {
   const root = await mkdtemp(join(tmpdir(), "pi-bridge-"));
   const llm = await startMockLlm(text);
-  const agentDir = join(root, "agent");
   const workspace = join(root, "workspace");
   await mkdir(workspace, { recursive: true });
-  await writePiConfig(agentDir, llm.url);
+  const env = mockProviderEnv(llm.url);
   const bridge = await startBridge({
-    piCommand: resolvePiBin(),
-    piArgs: ["--provider", "mock", "--model", "mock-model", "--no-tools"],
-    sessionDir: join(workspace, ".pi", "sessions"),
-    piEnv: { PI_CODING_AGENT_DIR: agentDir },
     port: 0,
-    log,
+    log: options.log,
+    storageDir: join(workspace, ".pi-durable"),
+    workspace,
+    provider: providerFromEnv(env),
+    env,
+    tools: options.tools,
   });
   return {
     bridge,
@@ -148,11 +123,16 @@ export async function createBridgeHarness(
   };
 }
 
-export function resolvePiBin(): string {
-  if (process.env.PI_BIN) return process.env.PI_BIN;
-  // Tests run under the same Node installation that has `pi` installed
-  // globally, so the wrapper sits next to the Node binary.
-  return join(resolve(process.execPath, ".."), "pi");
+/** The env a production actor would receive, pointed at the mock LLM. */
+export function mockProviderEnv(baseUrl: string): NodeJS.ProcessEnv {
+  return {
+    PI_PROVIDER: "mock",
+    PI_MODEL: "mock-model",
+    PI_PROVIDER_BASE_URL: baseUrl,
+    PI_PROVIDER_API: "openai-completions",
+    PI_PROVIDER_API_KEY_ENV: "MOCK_KEY",
+    MOCK_KEY: "mock-key",
+  };
 }
 
 export class BridgeClient {

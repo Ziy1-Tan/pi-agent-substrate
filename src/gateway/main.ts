@@ -19,8 +19,8 @@
  *                        /etc/pi/egress-policy.yaml, where the manifest mounts it)
  *   IDLE_SECONDS         idle window before suspend (0 disables, default 60)
  *
- * The `PI_*` variables configure Pi itself and are read by the actor, not
- * here: `PI_PROVIDER`, `PI_MODEL`, `PI_BIN`, and the model metadata.
+ * The `PI_*` variables configure the model and are read by the actor, not
+ * here: `PI_PROVIDER`, `PI_MODEL`, `PI_PROVIDER_BASE_URL`, and the model metadata.
  */
 import { GatewayManager } from "./manager.js";
 import { startHttpServer } from "./server.js";

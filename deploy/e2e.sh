@@ -125,6 +125,8 @@ if [[ "${ONLY}" != "e2e" ]]; then
   PI_MODEL=mock-model
   PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
   PI_PROVIDER_API=openai-completions
+  # The mock scripts bash tool calls, so the e2e actor needs the shell tool.
+  PI_TOOLS=bash
   render_actor_template bin/actor-template.yaml "${ACTOR_IMAGE}"
 
   # A template is immutable and the server refuses a create when one already

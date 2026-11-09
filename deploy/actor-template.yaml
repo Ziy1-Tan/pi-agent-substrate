@@ -15,6 +15,7 @@
 #   API                wire protocol, e.g. openai-completions
 #   CONTEXT_WINDOW     model context window
 #   MAX_TOKENS         model output limit
+#   TOOLS              none or bash
 #   SANDBOX_CLASS_NAME microvm or gvisor, matching the WorkerPool label
 metadata:
   atespace: ${ATESPACE}
@@ -34,9 +35,13 @@ containers:
         value: "${PROVIDER}"
       - name: PI_MODEL
         value: "${MODEL_ID}"
-      # The bridge composes Pi's models.json from these values at startup. The API
-      # key is deliberately absent: Pi sends a placeholder Authorization header
-      # and the egress gateway replaces it.
+      # The Harness reads the key from the variable named here. The value is a
+      # placeholder: the egress gateway replaces the Authorization header, so the
+      # real key never enters the actor.
+      - name: PI_PROVIDER_API_KEY_ENV
+        value: "PI_PROVIDER_API_KEY"
+      - name: PI_PROVIDER_API_KEY
+        value: "egress-injected"
       - name: PI_PROVIDER_BASE_URL
         value: "${BASE_URL}"
       - name: PI_PROVIDER_API
@@ -45,12 +50,10 @@ containers:
         value: "${CONTEXT_WINDOW}"
       - name: PI_MODEL_MAX_TOKENS
         value: "${MAX_TOKENS}"
-      # Actor egress only passes the urls an EgressPolicy allows; Pi's startup
-      # update and model-catalog checks would otherwise wait on a denied request.
-      - name: PI_OFFLINE
-        value: "1"
-      - name: PI_SKIP_VERSION_CHECK
-        value: "1"
+      - name: PI_TOOLS
+        value: "${TOOLS}"
+      # Actor egress only passes the urls an EgressPolicy allows. The actor makes
+      # no other outbound calls, so nothing beyond the provider endpoint is allowed.
       # An `https` egress rule is terminated at the gateway, which mints the leaf
       # the actor sees. That leaf chains to the substrate CA, not a public root,
       # so Node rejects it unless the projected bundle is trusted. Without this

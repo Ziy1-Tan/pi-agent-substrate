@@ -67,7 +67,7 @@ ConfigMap once at startup, so restart the deployment after editing.
 A template name and an actor name may not contain dots: `pi-local-v1.0.0` is
 rejected with `must not contain dots`. Use dashes (`pi-local-v1-0-0`).
 
-`deploy/actor-template.json` follows the v1.0.0 protojson schema:
+`deploy/actor-template.yaml` follows the v1.0.0 protojson schema:
 no `sandboxConfig`, no `snapshotConfig.storageLocation` (it needs the
 `PerTemplateSnapshotLocation` preview gate), and limits in integer units
 (`cpuMillicores`, `memoryBytes`), not Kubernetes quantities. The sandbox class

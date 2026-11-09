@@ -107,7 +107,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
   PI_MODEL=mock-model
   PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
   PI_PROVIDER_API=openai-completions
-  render_actor_template bin/actor-template.json "${ACTOR_IMAGE}"
+  render_actor_template bin/actor-template.yaml "${ACTOR_IMAGE}"
 
   # A template is immutable and the server refuses a create when one already
   # exists, so a rerun against the same cluster would fail. Every run builds a
@@ -140,7 +140,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
     echo "    replacing template ${ATESPACE}/${ACTOR_TEMPLATE} with the image this run built"
     "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor-template "${ACTOR_TEMPLATE}" -a "${ATESPACE}"
   fi
-  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.json
+  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.yaml
 
   echo "==> waiting for the golden snapshot"
   for _ in $(seq 1 120); do

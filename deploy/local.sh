@@ -206,11 +206,11 @@ if ! printf '%s' "${policy}" | grep -q "atespace: ${ATESPACE}\$"; then
 fi
 
 echo "==> creating the actor template (${PI_PROVIDER}/${PI_MODEL})"
-render_actor_template bin/actor-template.json "${ACTOR_IMAGE}"
+render_actor_template bin/actor-template.yaml "${ACTOR_IMAGE}"
 # A template is immutable, so a rerun cannot replace it. Creating one is
 # therefore best-effort: an existing template is reused as-is, and the warning
 # says what to do when the image or the provider changed.
-template_error="$("${ate[@]}" create actor-template -f bin/actor-template.json 2>&1)" || {
+template_error="$("${ate[@]}" create actor-template -f bin/actor-template.yaml 2>&1)" || {
   if ! printf '%s' "${template_error}" | grep -q "AlreadyExists"; then
     echo "${template_error}" >&2
     exit 1

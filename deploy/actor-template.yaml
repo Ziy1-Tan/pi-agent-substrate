@@ -1,4 +1,5 @@
-# ActorTemplate for local and clustered deployments, in ateapi protojson form.
+# ActorTemplate for local and clustered deployments. Field names follow the
+# ateapi protojson form (camelCase); the file itself is YAML.
 #
 # The template is immutable. Changing the image, env, resources, or the
 # sandbox-class selector means creating a new template (and a new actor that

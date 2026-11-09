@@ -19,14 +19,22 @@ metadata:
     workload: pi
     sandboxClass: ${SANDBOX_CLASS_NAME}
 spec:
-  replicas: 1
+  # Two workers: an actor occupies its whole worker, so each concurrent
+  # conversation needs its own. The kind node has 8 cores (colima default
+  # profile); each worker requests 1.
+  replicas: 2
   sandboxClasses:
     - name: ${SANDBOX_CLASS_NAME}
       configRef:
         name: ${SANDBOX_CONFIG_NAME}
   template:
+    # One core per worker: the worker pod size is the per-actor ceiling, and the
+    # actor's own size is the template's resources (1000m), which fits inside it.
     resources:
       limits:
-        cpu: "2"
+        cpu: "1"
+        memory: 2Gi
+      requests:
+        cpu: "1"
         memory: 2Gi
   workerImage: ${WORKER_IMAGE}

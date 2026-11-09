@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 
 import WebSocket from "ws";
 
@@ -19,7 +20,27 @@ export interface ActorEndpoint {
   turnTimeoutMs?: number;
 }
 
+/**
+ * Where a turn was when it failed. In `connect` the prompt never left the
+ * gateway, so the turn can be retried without running it twice; in `turn` the
+ * actor may already be working on it.
+ */
+export type TurnPhase = "connect" | "turn";
+
+/** A turn that failed before a reply, with the router's HTTP status when it refused the connection. */
+export class TurnError extends Error {
+  constructor(
+    message: string,
+    readonly phase: TurnPhase,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "TurnError";
+  }
+}
+
 const CONNECT_TIMEOUT_MS = 10_000;
+const MAX_REFUSAL_BYTES = 4096;
 
 /**
  * Runs one turn: connects through the router, which resumes a suspended
@@ -38,21 +59,36 @@ export function sendTurn(endpoint: ActorEndpoint, actor: ActorRef, prompt: strin
       handshakeTimeout: CONNECT_TIMEOUT_MS,
       ...(endpoint.identity ? readIdentity(endpoint.identity) : {}),
     });
-    let settled = false;
+    let phase: TurnPhase | "settled" = "connect";
     const finish = (outcome: Reply | Error) => {
-      if (settled) return;
-      settled = true;
+      if (phase === "settled") return;
+      phase = "settled";
       clearTimeout(timer);
       socket.terminate();
       if (outcome instanceof Error) reject(outcome);
       else resolve(outcome);
     };
-    const timer = setTimeout(
-      () => finish(new Error(`turn did not settle in ${timeoutMs}ms`)),
-      timeoutMs,
-    );
+    const fail = (message: string, status?: number) => {
+      if (phase !== "settled") finish(new TurnError(message, phase, status));
+    };
+    const timer = setTimeout(() => fail(`turn did not settle in ${timeoutMs}ms`), timeoutMs);
 
-    socket.on("open", () => socket.send(JSON.stringify({ id, prompt })));
+    // The router refuses with an HTTP status and a short reason, such as
+    // `actor pi-agents/pi-x not found`; keep both instead of ws's bare
+    // "Unexpected server response".
+    socket.on("unexpected-response", (request, response: IncomingMessage) => {
+      void readRefusal(response).then((body) => {
+        request.destroy();
+        fail(
+          `router answered ${response.statusCode}${body ? `: ${body}` : ""}`,
+          response.statusCode,
+        );
+      });
+    });
+    socket.on("open", () => {
+      phase = "turn";
+      socket.send(JSON.stringify({ id, prompt }));
+    });
     socket.on("message", (data: Buffer) => {
       let record: { id?: unknown; text?: unknown; error?: unknown };
       try {
@@ -67,7 +103,19 @@ export function sendTurn(endpoint: ActorEndpoint, actor: ActorRef, prompt: strin
           : { text: typeof record.text === "string" ? record.text : "" },
       );
     });
-    socket.on("error", (error: Error) => finish(error));
-    socket.on("close", () => finish(new Error("actor connection closed during the turn")));
+    socket.on("error", (error: Error) => fail(error.message));
+    socket.on("close", () => fail("actor connection closed during the turn"));
+  });
+}
+
+function readRefusal(response: IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    let body = "";
+    response.setEncoding("utf8");
+    response.on("data", (chunk: string) => {
+      if (body.length < MAX_REFUSAL_BYTES) body += chunk;
+    });
+    response.on("end", () => resolve(body.trim().slice(0, MAX_REFUSAL_BYTES)));
+    response.on("error", () => resolve(body.trim()));
   });
 }

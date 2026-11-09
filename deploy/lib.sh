@@ -88,3 +88,38 @@ grant_gateway_access() { # <kubectl-ate command...>
 	printf '%s\n' "bindings:" "- role: editor" "  members:" "  - user:${GATEWAY_SPIFFE_ID}" |
 		"$@" create access-policy -a "${ATESPACE}" -f -
 }
+
+# Waits for a template's golden snapshot. ate-api reports it in
+# status.goldenSnapshotStatus: a goldenTag once it is ready, an errorMessage
+# once it failed, neither while it is still being taken.
+wait_for_golden_snapshot() { # <template> <kubectl-ate command...>
+	local template="$1" state=""
+	shift
+	for _ in $(seq 1 120); do
+		state="$("$@" get actor-template -a "${ATESPACE}" "${template}" -o json 2>/dev/null | node -e '
+			let raw = "";
+			process.stdin.on("data", (chunk) => (raw += chunk)).on("end", () => {
+				let parsed;
+				try { parsed = JSON.parse(raw); } catch { return console.log("pending"); }
+				const template = Array.isArray(parsed.actorTemplates) ? parsed.actorTemplates[0] : parsed;
+				const golden = template?.status?.goldenSnapshotStatus ?? {};
+				if (golden.errorMessage) console.log(`failed ${golden.errorMessage}`);
+				else if (golden.goldenTag?.name) console.log(`ready ${golden.goldenTag.name}`);
+				else console.log("pending");
+			});
+		')" || state="pending"
+		case "${state}" in
+		ready*)
+			echo "    golden snapshot ${state#ready }"
+			return 0
+			;;
+		failed*)
+			echo "template ${ATESPACE}/${template} failed its golden snapshot: ${state#failed }" >&2
+			return 1
+			;;
+		esac
+		sleep 5
+	done
+	echo "template ${ATESPACE}/${template} has no golden snapshot after 10 minutes" >&2
+	return 1
+}

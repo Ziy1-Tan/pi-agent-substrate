@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { actorNameFor, Gateway } from "../src/gateway/gateway.js";
+import { TurnError } from "../src/gateway/turn.js";
 import { echoTurn, FakeControl } from "./support/fakes.js";
 
 test("actor names are deterministic and legal", () => {
@@ -90,4 +91,83 @@ test("a failed open is retried by the next message", async (t) => {
 
   await assert.rejects(gateway.receive("local/chat", "hi"), /ate-api unavailable/);
   assert.equal((await gateway.receive("local/chat", "hi")).text, "Reply: hi");
+});
+
+test("an actor deleted behind the gateway's back is recreated before the turn is sent", async (t) => {
+  const control = new FakeControl();
+  let present = true;
+  const gateway = new Gateway({
+    control,
+    atespace: "pi-agents",
+    egressPolicy: { rules: [] },
+    idleMs: 60_000,
+    runTurn: async (actor, prompt) => {
+      if (!present) throw new TurnError("router answered 404", "connect", 404);
+      return { text: `${actor.name}: ${prompt}` };
+    },
+  });
+  t.after(() => gateway.close());
+  const ensure = control.ensure.bind(control);
+  control.ensure = async (actor) => {
+    await ensure(actor);
+    present = true;
+  };
+
+  await gateway.receive("local/chat", "first");
+  present = false;
+  assert.equal((await gateway.receive("local/chat", "again")).text, "pi-local-chat: again");
+  assert.deepEqual(control.calls, [
+    "ensure pi-local-chat",
+    "egress pi-local-chat",
+    "ensure pi-local-chat",
+    "egress pi-local-chat",
+  ]);
+  assert.equal(gateway.metrics().counters.actors_recreated, 1);
+});
+
+test("a failure after the prompt was sent is not retried", async (t) => {
+  const control = new FakeControl();
+  let attempts = 0;
+  const gateway = new Gateway({
+    control,
+    atespace: "pi-agents",
+    idleMs: 60_000,
+    runTurn: async () => {
+      attempts += 1;
+      throw new TurnError("actor connection closed during the turn", "turn");
+    },
+  });
+  t.after(() => gateway.close());
+
+  await assert.rejects(gateway.receive("local/chat", "hi"), /closed during the turn/);
+  assert.equal(attempts, 1, "the actor may already be running the turn");
+  assert.deepEqual(control.calls, ["ensure pi-local-chat"]);
+});
+
+test("metrics show each conversation's lifecycle state", async (t) => {
+  const control = new FakeControl();
+  let releaseEnsure: () => void = () => undefined;
+  const ensure = control.ensure.bind(control);
+  control.ensure = async (actor) => {
+    await new Promise<void>((resolve) => (releaseEnsure = resolve));
+    await ensure(actor);
+  };
+  const gateway = new Gateway({
+    control,
+    atespace: "pi-agents",
+    idleMs: 60_000,
+    runTurn: echoTurn(),
+  });
+  t.after(() => gateway.close());
+
+  const first = gateway.receive("local/chat", "hi");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(gateway.metrics().conversations, {
+    "local/chat": { actor: "pi-local-chat", state: "OPENING" },
+  });
+  releaseEnsure();
+  await first;
+  assert.deepEqual(gateway.metrics().conversations, {
+    "local/chat": { actor: "pi-local-chat", state: "GRACE", inflight: 0 },
+  });
 });

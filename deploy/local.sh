@@ -223,19 +223,7 @@ template_error="$("${ate[@]}" create actor-template -f bin/actor-template.yaml 2
 }
 
 echo "==> waiting for the golden snapshot"
-for _ in $(seq 1 120); do
-  tag="$("${ate[@]}" get actor-template -a "${ATESPACE}" "${ACTOR_TEMPLATE}" 2>/dev/null | tail -1 || true)"
-  if echo "${tag}" | grep -qE '[0-9a-f]{8}-'; then break; fi
-  if echo "${tag}" | grep -q 'ERROR'; then
-    echo "template failed: ${tag}" >&2
-    exit 1
-  fi
-  sleep 5
-done
-if ! printf '%s' "${tag}" | grep -qE '[0-9a-f]{8}-'; then
-  echo "template did not produce a golden snapshot; inspect ${ATESPACE}/${ACTOR_TEMPLATE}" >&2
-  exit 1
-fi
+wait_for_golden_snapshot "${ACTOR_TEMPLATE}" "${ate[@]}"
 
 echo "==> creating the gateway namespace and inputs"
 apply_gateway_namespace

@@ -116,11 +116,12 @@ test("a failed suspend is counted and retried after another idle window", async 
   await clock.advance(1_000);
   assert.equal(lifecycle.state, "GRACE", "a failed suspend leaves the actor eligible again");
   assert.deepEqual(counted, ["suspends", "suspend_failures"]);
+  assert.equal(lifecycle.snapshot().lastSuspendError, "ateapi unavailable");
 
   control.failSuspend = undefined;
   await clock.advance(1_000);
   assert.equal(control.suspends, 2);
-  assert.equal(lifecycle.state, "SUSPENDED");
+  assert.deepEqual(lifecycle.snapshot(), { state: "SUSPENDED", inflight: 0 });
 });
 
 test("an idle window of zero disables the suspend entirely", async () => {

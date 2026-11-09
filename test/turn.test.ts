@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import test, { type TestContext } from "node:test";
 
 import { startBridge, type Bridge } from "../src/actor/bridge.js";
 import { providerFromEnv } from "../src/actor/provider.js";
-import { sendTurn } from "../src/gateway/turn.js";
+import { sendTurn, TurnError } from "../src/gateway/turn.js";
 import type { ActorRef } from "../src/gateway/ateapi.js";
 import { mockProviderEnv, startMockLlm } from "./support/bridge.js";
 
@@ -59,6 +60,29 @@ test("a restarted actor answers the next turn over the same storage", async (t) 
   assert.equal((await e2e.send("what did I say?")).text, "still here");
 });
 
-test("an actor that is not listening fails the turn instead of hanging", async () => {
-  await assert.rejects(sendTurn({ url: "ws://127.0.0.1:1", turnTimeoutMs: 5_000 }, actor, "hi"));
+test("an actor that is not listening fails the turn before sending it", async () => {
+  await assert.rejects(
+    sendTurn({ url: "ws://127.0.0.1:1", turnTimeoutMs: 5_000 }, actor, "hi"),
+    (error: unknown) => error instanceof TurnError && error.phase === "connect",
+  );
+});
+
+test("a router refusal keeps its status and reason", async (t) => {
+  const router = createServer((_request, response) => {
+    response.writeHead(404, { "content-type": "text/plain" });
+    response.end("actor pi-agents/pi-test not found");
+  });
+  await new Promise<void>((resolve) => router.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => router.close(() => resolve())));
+  const address = router.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+
+  await assert.rejects(
+    sendTurn({ url: `ws://127.0.0.1:${port}` }, actor, "hi"),
+    (error: unknown) =>
+      error instanceof TurnError &&
+      error.phase === "connect" &&
+      error.status === 404 &&
+      error.message === "router answered 404: actor pi-agents/pi-test not found",
+  );
 });

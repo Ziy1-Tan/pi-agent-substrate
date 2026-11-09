@@ -196,8 +196,32 @@ async function main() {
       JSON.stringify(readBack.body),
     );
 
-    // A kind WorkerPool is small, so the second conversation runs after the
-    // first one has suspended. It still gets its own actor.
+    const lifecycle = await (await fetch(`http://127.0.0.1:${port}/metrics`)).json();
+    check(
+      "metrics report the conversation's lifecycle state",
+      lifecycle.conversations?.[alphaId]?.state === "GRACE" &&
+        lifecycle.conversations?.[alphaId]?.actor === actorNameFor(alphaId, actorPrefix),
+      JSON.stringify(lifecycle.conversations),
+    );
+
+    // An actor deleted behind the gateway's back is refused by the router with
+    // a 404 before the prompt is sent, so the gateway recreates it and retries.
+    await dropActor(actorNameFor(alphaId, actorPrefix));
+    await waitFor(
+      () => readState(actorNameFor(alphaId, actorPrefix)),
+      (state) => state === undefined,
+      60_000,
+      "alpha to be deleted",
+    );
+    const recreated = await post(alphaId, "are you back");
+    check(
+      "a deleted actor is recreated on the next message",
+      recreated.status === 200 && /Hello from the mock model/.test(recreated.body.text ?? ""),
+      JSON.stringify(recreated.body),
+    );
+
+    // A kind WorkerPool is small, so free alpha's slot before beta runs.
+    await dropActor(actorNameFor(alphaId, actorPrefix));
     const beta = await post(betaId, "say hello to beta");
     check(
       "the second conversation gets its own reply",
@@ -213,9 +237,9 @@ async function main() {
       `${alphaActor} / ${betaActor}`,
     );
     check(
-      "both actors exist in the atespace",
-      (await readState(alphaActor)) !== undefined && (await readState(betaActor)) !== undefined,
-      `${alphaActor}=${await readState(alphaActor)} ${betaActor}=${await readState(betaActor)}`,
+      "the second conversation's actor exists in the atespace",
+      (await readState(betaActor)) !== undefined,
+      `${betaActor}=${await readState(betaActor)}`,
     );
     check(
       "the replies name their own conversation",
@@ -232,6 +256,11 @@ async function main() {
     check(
       "resumed turns are counted",
       (metrics.counters?.resumed_turns ?? 0) >= 1,
+      JSON.stringify(metrics.counters),
+    );
+    check(
+      "the recreated actor is counted",
+      metrics.counters?.actors_recreated === 1,
       JSON.stringify(metrics.counters),
     );
   } finally {

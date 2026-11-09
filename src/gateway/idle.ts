@@ -2,6 +2,15 @@ import type { ActorRef } from "./ateapi.js";
 
 export type IdleState = "IDLE" | "ACTIVE" | "GRACE" | "SUSPENDING" | "SUSPENDED";
 
+/** What `/metrics` shows for one conversation. */
+export interface IdleSnapshot {
+  state: IdleState;
+  /** Turns started but not yet settled; above 0 only in ACTIVE. */
+  inflight: number;
+  /** Why the last suspend failed; cleared when one succeeds. */
+  lastSuspendError?: string;
+}
+
 /** Injectable timers so idle timing can be tested without sleeping. */
 export interface Clock {
   schedule(callback: () => void, delayMs: number): unknown;
@@ -38,6 +47,9 @@ export interface IdleLifecycleOptions {
  * flight, because substrate's suspend cancels in-flight work rather than
  * draining it. `turnSettled()` is the only entry to GRACE, and `turnStarted()`
  * always leaves it.
+ *
+ * SUSPENDED is what the gateway asked for, not what ate-api reports: the
+ * router resumes the actor on the next connect whatever its real state.
  */
 export class IdleLifecycle {
   private readonly options: IdleLifecycleOptions;
@@ -49,6 +61,7 @@ export class IdleLifecycle {
   private inflight = 0;
   private timer: unknown;
   private suspending: Promise<void> | undefined;
+  private lastSuspendError: string | undefined;
 
   constructor(options: IdleLifecycleOptions) {
     this.options = options;
@@ -60,11 +73,25 @@ export class IdleLifecycle {
     return this.current;
   }
 
-  /** A prompt was accepted for this conversation. Cancels any pending suspend. */
-  turnStarted(): void {
+  snapshot(): IdleSnapshot {
+    return {
+      state: this.current,
+      inflight: this.inflight,
+      ...(this.lastSuspendError === undefined ? {} : { lastSuspendError: this.lastSuspendError }),
+    };
+  }
+
+  /**
+   * A prompt was accepted for this conversation. Cancels any pending suspend.
+   * Returns true when the turn wakes an actor the gateway suspended, or is
+   * suspending, so the router has to resume it.
+   */
+  turnStarted(): boolean {
+    const resumes = this.current === "SUSPENDED" || this.current === "SUSPENDING";
     this.inflight += 1;
     this.cancelTimer();
     this.current = "ACTIVE";
+    return resumes;
   }
 
   /** A turn ended, successfully or not. This is the only path into GRACE. */
@@ -103,12 +130,14 @@ export class IdleLifecycle {
     this.suspending = this.options
       .suspend(actor)
       .then(() => {
+        this.lastSuspendError = undefined;
         // A prompt that raced the suspend owns the actor now; keep it ACTIVE.
         if (this.current === "SUSPENDING") this.current = "SUSPENDED";
         this.log(`suspended ${actor.atespace}/${actor.name} after the idle window`);
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
+        this.lastSuspendError = message;
         this.options.count?.("suspend_failures");
         this.log(`suspend ${actor.name} failed: ${message}; retrying after the idle window`);
         if (this.current === "SUSPENDING") {

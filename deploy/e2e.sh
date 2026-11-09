@@ -151,15 +151,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.yaml
 
   echo "==> waiting for the golden snapshot"
-  for _ in $(seq 1 120); do
-    tag="$("${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get actor-template -a "${ATESPACE}" "${ACTOR_TEMPLATE}" 2>/dev/null | tail -1 || true)"
-    if echo "${tag}" | grep -qE '[0-9a-f]{8}-'; then break; fi
-    if echo "${tag}" | grep -q 'ERROR'; then
-      echo "template failed: ${tag}" >&2
-      exit 1
-    fi
-    sleep 5
-  done
+  wait_for_golden_snapshot "${ACTOR_TEMPLATE}" "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"}
 
 fi
 

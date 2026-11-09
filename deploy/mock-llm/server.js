@@ -46,14 +46,24 @@ const server = createServer((request, response) => {
       .slice(lastUserIndex + 1)
       .some((message) => message.role === "tool");
 
+    // Logs what the upstream received without the secret itself: the length and
+    // a short prefix are enough to tell a placeholder from an injected key.
+    const auth = String(request.headers.authorization ?? "");
+    console.log(`auth: length=${auth.length} prefix=${JSON.stringify(auth.slice(0, 12))}`);
     console.log(
-      `request: ${users.length} user message(s), last=${JSON.stringify(lastText).slice(0, 160)}, tool=${toolResultSeen}`,
+      `request: ${users.length} user message(s), last=${JSON.stringify(lastText).slice(0, 160)}, tool=${toolResultSeen}, ` +
+        `offered=${JSON.stringify((payload.tools ?? []).map((tool) => tool.function?.name))}, ` +
+        `max_tokens=${payload.max_completion_tokens ?? payload.max_tokens}`,
     );
 
     let reply;
     const toolCall = toolResultSeen ? undefined : pickToolCall(lastText);
     if (toolCall) {
       reply = { toolCall, text: "" };
+    } else if (toolResultSeen) {
+      // Echo the tool output so the gateway can see the command really ran.
+      const output = flatten(messages.findLast((message) => message.role === "tool")?.content);
+      reply = { text: `${text} [turn ${users.length}] tool output: ${output.trim()}` };
     } else {
       reply = { text: `${text} [turn ${users.length}]` };
     }

@@ -185,6 +185,17 @@ async function main() {
       JSON.stringify(resumed.body),
     );
 
+    // The template enables the shell tool. A file written in one turn and read
+    // back in the next proves the tool ran inside the actor's workspace.
+    const marker = `marker-${Date.now()}`;
+    await post(alphaId, `run printf '${marker}' > /workspace/e2e-marker.txt`);
+    const readBack = await post(alphaId, "run cat /workspace/e2e-marker.txt");
+    check(
+      "the bash tool runs in the actor and its output survives a turn",
+      readBack.status === 200 && (readBack.body.text ?? "").includes(marker),
+      JSON.stringify(readBack.body),
+    );
+
     // A kind WorkerPool is small, so the second conversation runs after the
     // first one has suspended. It still gets its own actor.
     const beta = await post(betaId, "say hello to beta");

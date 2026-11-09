@@ -114,6 +114,8 @@ if [[ "${ONLY}" != "e2e" ]]; then
     < deploy/workerpool.yaml | "${kube[@]}" apply -f -
   ATESPACE="${ATESPACE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
     envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/mock-llm.yaml | "${kube[@]}" apply -f -
+  # The tag does not change between runs, so apply alone keeps the old pod.
+  "${kube[@]}" -n "${ATESPACE}" rollout restart deploy/mock-llm
 
   "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
   "${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=180s
@@ -155,6 +157,12 @@ if [[ "${ONLY}" != "e2e" ]]; then
   if "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get actor-template -a "${ATESPACE}" "${ACTOR_TEMPLATE}" >/dev/null 2>&1; then
     echo "    replacing template ${ATESPACE}/${ACTOR_TEMPLATE} with the image this run built"
     "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor-template "${ACTOR_TEMPLATE}" -a "${ATESPACE}"
+  fi
+  # The atespace is an ateapi object, separate from the Kubernetes namespace
+  # the worker pool manifest creates. Templates cannot be created without it.
+  if ! "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get atespace "${ATESPACE}" >/dev/null 2>&1; then
+    echo "    creating atespace ${ATESPACE}"
+    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create atespace "${ATESPACE}"
   fi
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.yaml
 

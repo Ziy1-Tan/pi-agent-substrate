@@ -5,9 +5,9 @@ metadata:
   atespace: pi-agents
   name: default
 rules:
-- http:
-    hostnames:
-    - mock-llm.pi-agents.svc.cluster.local
-    ports:
-      numbers:
-      - 8080
+  - http:
+      hostnames:
+        - mock-llm.pi-agents.svc.cluster.local
+      ports:
+        numbers:
+          - 8080

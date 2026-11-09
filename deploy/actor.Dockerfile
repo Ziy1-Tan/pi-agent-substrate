@@ -1,12 +1,9 @@
-# Actor image: Node + the pinned Pi release + the RPC bridge.
+# Actor image: Node + the pi-durable Harness. There is no pi CLI in the image:
+# each turn runs in-process through the Harness (see src/actor/bridge.ts).
 #
-# Pi is installed globally at the version this repository declares in
-# package.json (`piVersion`). Upgrade both together; the RPC contract the
-# bridge depends on is documented in src/actor/rpc.ts.
+# Versions are pinned in package.json. Node must be >= 22.19, which pi-durable
+# requires; the base image tag below must stay at or above that.
 FROM node:22-bookworm-slim
-
-ARG PI_VERSION=0.84.2
-RUN npm install --global --no-fund --no-audit @earendil-works/pi-coding-agent@${PI_VERSION}
 
 WORKDIR /app
 COPY package.json package-lock.json ./

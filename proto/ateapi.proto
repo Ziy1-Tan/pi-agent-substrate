@@ -1,0 +1,98 @@
+// The subset of Agent Substrate's api/ateapi/v1/ateapi.proto (v1.0.0) that the
+// gateway calls. Copyright 2026 The Agent Substrate Authors, Apache-2.0.
+//
+// Only the fields the gateway sends are declared, but the EgressPolicy tree is
+// complete. Field numbers must match the upstream file. The gateway rejects a
+// manifest field missing here (checkEgressPolicy), so an upstream addition
+// fails loudly until it is copied in. Re-check this file against the release
+// named by `substrateVersion` in package.json whenever that changes.
+syntax = "proto3";
+
+package substrate.ateapi.v1;
+
+service Control {
+  rpc CreateActor(CreateActorRequest) returns (Actor);
+  rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse);
+  rpc CreateActorEgressPolicy(CreateActorEgressPolicyRequest) returns (EgressPolicy);
+}
+
+message ObjectRef {
+  string atespace = 1;
+  string name = 2;
+}
+
+message ResourceMetadata {
+  string atespace = 1;
+  string name = 2;
+}
+
+message Actor {
+  ResourceMetadata metadata = 1;
+  ObjectRef actor_template = 2;
+}
+
+message CreateActorRequest {
+  Actor actor = 1;
+}
+
+message SuspendActorRequest {
+  ObjectRef actor = 1;
+}
+
+message SuspendActorResponse {}
+
+message CreateActorEgressPolicyRequest {
+  ObjectRef actor = 1;
+  EgressPolicy egress_policy = 2;
+}
+
+message EgressPolicy {
+  ResourceMetadata metadata = 1;
+  repeated EgressRule rules = 2;
+}
+
+message EgressRule {
+  HttpRule http = 1;
+  HttpsRule https = 2;
+  TlsPassthroughRule tls_passthrough = 3;
+}
+
+message HttpRule {
+  repeated string hostnames = 1;
+  Ports ports = 2;
+  HttpRuleEffects effects = 3;
+}
+
+message HttpsRule {
+  repeated string hostnames = 1;
+  Ports ports = 2;
+  HttpRuleEffects effects = 3;
+}
+
+message TlsPassthroughRule {
+  repeated string hostnames = 1;
+  Ports ports = 2;
+}
+
+message Ports {
+  AllPorts all = 1;
+  repeated int32 numbers = 2;
+}
+
+message AllPorts {}
+
+message HttpRuleEffects {
+  repeated CredentialHeader replace_headers = 1;
+}
+
+message CredentialHeader {
+  string header = 1;
+  string prefix = 2;
+  string credential_uri = 3;
+  ActorJwtSource actor_jwt = 4;
+}
+
+message ActorJwtSource {
+  repeated string audiences = 1;
+  int64 expiration_seconds = 2;
+}

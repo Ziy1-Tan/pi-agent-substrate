@@ -54,11 +54,9 @@ if [[ "${ONLY}" != "e2e" ]]; then
   docker build -t "${REGISTRY}/pi-actor:local" -f deploy/actor.Dockerfile .
 
   echo "==> building the mock LLM image"
-  docker build -t "${REGISTRY}/pi-mock-llm:local" -f deploy/mock-llm/Dockerfile deploy/mock-llm
+  docker build -t "${REGISTRY}/pi-mock-llm:local" -f deploy/e2e/mock-llm/Dockerfile deploy/e2e/mock-llm
 
   echo "==> building the gateway image"
-  mkdir -p bin
-  cp "$(command -v "${KUBECTL_ATE}")" bin/kubectl-ate
   docker build -t "${GATEWAY_IMAGE}" -f deploy/gateway.Dockerfile .
 
   echo "==> pushing to ${REGISTRY}"
@@ -97,7 +95,9 @@ if [[ "${ONLY}" != "e2e" ]]; then
     envsubst '${ATESPACE} ${WORKERPOOL_NAME} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME} ${WORKER_IMAGE}' \
     < deploy/workerpool.yaml | "${kube[@]}" apply -f -
   ATESPACE="${ATESPACE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
-    envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/mock-llm.yaml | "${kube[@]}" apply -f -
+    envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/e2e/mock-llm.yaml | "${kube[@]}" apply -f -
+  # The tag does not change between runs, so apply alone keeps the old pod.
+  "${kube[@]}" -n "${ATESPACE}" rollout restart deploy/mock-llm
 
   "${kube[@]}" -n "${ATESPACE}" rollout status deploy/mock-llm --timeout=180s
   "${kube[@]}" -n "${ATESPACE}" rollout status "deploy/${WORKERPOOL_NAME}" --timeout=180s
@@ -106,8 +106,9 @@ if [[ "${ONLY}" != "e2e" ]]; then
   PI_PROVIDER=mock
   PI_MODEL=mock-model
   PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
-  PI_PROVIDER_API=openai-completions
-  render_actor_template bin/actor-template.json "${ACTOR_IMAGE}"
+  # The mock scripts bash tool calls, so the e2e actor needs the shell tool.
+  PI_TOOLS=bash
+  render_actor_template bin/actor-template.yaml "${ACTOR_IMAGE}"
 
   # A template is immutable and the server refuses a create when one already
   # exists, so a rerun against the same cluster would fail. Every run builds a
@@ -140,7 +141,14 @@ if [[ "${ONLY}" != "e2e" ]]; then
     echo "    replacing template ${ATESPACE}/${ACTOR_TEMPLATE} with the image this run built"
     "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} delete actor-template "${ACTOR_TEMPLATE}" -a "${ATESPACE}"
   fi
-  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.json
+  # The atespace is an ateapi object, separate from the Kubernetes namespace
+  # the worker pool manifest creates. Templates cannot be created without it.
+  if ! "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} get atespace "${ATESPACE}" >/dev/null 2>&1; then
+    echo "    creating atespace ${ATESPACE}"
+    "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create atespace "${ATESPACE}"
+  fi
+  grant_gateway_access "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"}
+  "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.yaml
 
   echo "==> waiting for the golden snapshot"
   for _ in $(seq 1 120); do
@@ -157,9 +165,9 @@ fi
 
 if [[ "${ONLY}" != "deploy" ]]; then
   echo "==> deploying the e2e gateway"
-  "${kube[@]}" create namespace pi-gateway --dry-run=client -o yaml | "${kube[@]}" apply -f -
+  apply_gateway_namespace
   "${kube[@]}" -n pi-gateway create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
-    --from-file=egress-policy.yaml=deploy/mock-egress.yaml \
+    --from-file=egress-policy.yaml=deploy/e2e/egress-policy.yaml \
     --dry-run=client -o yaml | "${kube[@]}" apply -f -
   # Start from an empty deployment so the metrics counters describe this run.
   "${kube[@]}" -n pi-gateway delete deploy/"${GATEWAY_NAME}" svc/"${GATEWAY_NAME}" \
@@ -179,7 +187,7 @@ if [[ "${ONLY}" != "deploy" ]]; then
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     E2E_IDLE_SECONDS="${IDLE_SECONDS}" E2E_HTTP_PORT="${HTTP_PORT}" \
     E2E_CONVERSATIONS="${CONVERSATIONS}" \
-    node deploy/checks.js
+    node deploy/e2e/checks.js
 
   echo "==> removing the e2e gateway"
   kill "${gateway_forward}" 2>/dev/null || true

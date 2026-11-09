@@ -1,27 +1,35 @@
 {
-	"name": "pi-agent-substrate",
-	"version": "0.1.0",
-	"private": true,
-	"description": "Always-on Pi agents on Agent Substrate",
-	"type": "module",
-	"license": "Apache-2.0",
-	"engines": {
-		"node": ">=22"
-	},
-	"piVersion": "0.84.2",
-	"substrateVersion": "1.0.0",
-	"scripts": {
-		"build": "tsc -p tsconfig.json",
-		"clean": "rm -rf dist",
-		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "npm run clean && npm run build && NODE_ENV=test node --test dist/test/*.test.js"
-	},
-	"devDependencies": {
-		"@types/node": "^22.10.0",
-		"@types/ws": "^8.18.2",
-		"typescript": "^5.7.0"
-	},
-	"dependencies": {
-		"ws": "^8.22.0"
-	}
+  "name": "pi-agent-substrate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Always-on Pi agents on Agent Substrate",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run clean && npm run build && NODE_ENV=test node --test dist/test/*.test.js",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@grpc/grpc-js": "^1.14.7",
+    "@grpc/proto-loader": "^0.8.1",
+    "ws": "^8.21.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.2",
+    "oxfmt": "0.46.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "substrateVersion": "1.0.0"
 }

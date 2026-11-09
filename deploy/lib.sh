@@ -45,13 +45,46 @@ worker_image_for() { # <sandbox-class>
 }
 
 # Renders the actor template. Expects PI_PROVIDER, PI_MODEL,
-# PI_PROVIDER_BASE_URL, PI_PROVIDER_API, PI_MODEL_CONTEXT_WINDOW,
-# PI_MODEL_MAX_TOKENS, SANDBOX_CLASS_NAME, ACTOR_TEMPLATE, and ATESPACE.
+# PI_PROVIDER_BASE_URL, PI_MODEL_CONTEXT_WINDOW,
+# PI_MODEL_MAX_TOKENS, PI_TOOLS, SANDBOX_CLASS_NAME, ACTOR_TEMPLATE, and ATESPACE.
 render_actor_template() { # <out> <actor-image>
 	ACTOR_IMAGE="$2" ACTOR_TEMPLATE="${ACTOR_TEMPLATE}" ATESPACE="${ATESPACE}" \
 	PROVIDER="${PI_PROVIDER}" MODEL_ID="${PI_MODEL}" BASE_URL="${PI_PROVIDER_BASE_URL}" \
-	API="${PI_PROVIDER_API}" CONTEXT_WINDOW="${PI_MODEL_CONTEXT_WINDOW:-}" \
-	MAX_TOKENS="${PI_MODEL_MAX_TOKENS:-}" SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" \
-	envsubst '${ACTOR_IMAGE} ${ACTOR_TEMPLATE} ${ATESPACE} ${PROVIDER} ${MODEL_ID} ${BASE_URL} ${API} ${CONTEXT_WINDOW} ${MAX_TOKENS} ${SANDBOX_CLASS_NAME}' \
-	< deploy/actor-template.json > "$1"
+	CONTEXT_WINDOW="${PI_MODEL_CONTEXT_WINDOW:-}" \
+	MAX_TOKENS="${PI_MODEL_MAX_TOKENS:-}" TOOLS="${PI_TOOLS:-none}" SANDBOX_CLASS_NAME="${SANDBOX_CLASS_NAME}" \
+	envsubst '${ACTOR_IMAGE} ${ACTOR_TEMPLATE} ${ATESPACE} ${PROVIDER} ${MODEL_ID} ${BASE_URL} ${CONTEXT_WINDOW} ${MAX_TOKENS} ${TOOLS} ${SANDBOX_CLASS_NAME}' \
+	< deploy/actor-template.yaml > "$1"
+}
+
+GATEWAY_SPIFFE_ID="spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway"
+
+# The gateway's namespace carries the label ate-api's NetworkPolicy admits.
+# Applied here, not with `create namespace`, so a rerun cannot drop the label.
+apply_gateway_namespace() {
+	"${kube[@]}" apply -f - <<'YAML'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pi-gateway
+  labels:
+    ate.dev/api-access: "true"
+YAML
+}
+
+# The gateway calls ate-api as its pod certificate's SPIFFE ID, which needs
+# `editor` on the atespace to create, suspend, and set egress on actors. An
+# existing policy is left alone when it already names the gateway, and refused
+# otherwise: `update` replaces the whole policy, so merging is the owner's call.
+grant_gateway_access() { # <kubectl-ate command...>
+	local current
+	# A missing policy is not an error: `get` exits 0 and prints nothing to stdout.
+	current="$("$@" get access-policy -a "${ATESPACE}" -o yaml 2>/dev/null)" || current=""
+	if [[ -n "${current}" ]]; then
+		if printf '%s' "${current}" | grep -q "user:${GATEWAY_SPIFFE_ID}"; then return 0; fi
+		echo "atespace ${ATESPACE} has an access policy without user:${GATEWAY_SPIFFE_ID}" >&2
+		echo "add it as an editor: $* get access-policy -a ${ATESPACE} -o yaml, edit, then update" >&2
+		return 1
+	fi
+	printf '%s\n' "bindings:" "- role: editor" "  members:" "  - user:${GATEWAY_SPIFFE_ID}" |
+		"$@" create access-policy -a "${ATESPACE}" -f -
 }

@@ -1,4 +1,4 @@
-# Pi-agent-substrate
+# Pi-durable-substrate
 
 Traps found by running against a live kind cluster. Each one is something the
 code and the docs around it do not show. Architecture is in

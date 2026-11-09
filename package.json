@@ -1,5 +1,5 @@
 {
-  "name": "pi-agent-substrate",
+  "name": "pi-durable-substrate",
   "version": "0.1.0",
   "private": true,
   "description": "Always-on Pi agents on Agent Substrate",

@@ -1,4 +1,4 @@
-# pi-agent-substrate
+# pi-durable-substrate
 
 **Always-on Pi agents on [Agent Substrate](https://github.com/agent-substrate/substrate).**
 

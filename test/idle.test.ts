@@ -28,6 +28,11 @@ function gatewaySetup(idleMs: number, runTurn = echoTurn()) {
 
 // --- the state machine on its own ---
 
+test("a settle without a turn in flight is a protocol error", () => {
+  const { lifecycle } = lifecycleSetup();
+  assert.throws(() => lifecycle.turnSettled(), /no turn in flight/);
+});
+
 test("an idle window after a settled turn suspends exactly once", async () => {
   const { clock, control, lifecycle } = lifecycleSetup();
 

@@ -20,6 +20,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+// The deployed naming function itself, so the checks cannot drift from it.
+// e2e.sh runs `npm run build` before this script.
+import { actorNameFor } from "../../dist/src/gateway/gateway.js";
+
 const run = promisify(execFile);
 
 function ateClient() {
@@ -32,16 +36,6 @@ function ateClient() {
     return stdout;
   };
   return { atespace, ate };
-}
-
-/** `local/chat` -> `pi-local-chat`; mirrors `actorNameFor` in src/gateway/manager.ts. */
-function actorNameFor(conversationId, prefix = "pi-") {
-  const sanitized = conversationId
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-  return `${prefix}${sanitized || "conversation"}`;
 }
 
 /** Actor state, or undefined when the actor does not exist. */
@@ -100,7 +94,6 @@ function createChecks(log) {
 const { atespace, ate } = ateClient();
 const idleSeconds = Number(process.env.E2E_IDLE_SECONDS ?? 12);
 const port = Number(process.env.E2E_HTTP_PORT ?? 8899);
-const actorPrefix = "pi-";
 const conversations = (process.env.E2E_CONVERSATIONS ?? "web/alpha,web/beta").split(",");
 
 const log = (message) => console.log(`[gateway-e2e] ${message}`);
@@ -123,8 +116,7 @@ async function main() {
   // Both conversations get an actor on first use. Clear whatever an earlier
   // run left so this run tests the template it was given; the same cleanup
   // runs after the checks, so a passing run leaves nothing behind either.
-  for (const conversationId of conversations)
-    await dropActor(actorNameFor(conversationId, actorPrefix));
+  for (const conversationId of conversations) await dropActor(actorNameFor(conversationId));
 
   try {
     await waitFor(
@@ -155,8 +147,8 @@ async function main() {
     );
     check(
       "the conversation is bound to a deterministic actor",
-      (await readState(actorNameFor(alphaId, actorPrefix))) !== undefined,
-      actorNameFor(alphaId, actorPrefix),
+      (await readState(actorNameFor(alphaId))) !== undefined,
+      actorNameFor(alphaId),
     );
 
     // The idle lifecycle owns the actor now: no suspend command here.
@@ -172,7 +164,7 @@ async function main() {
     // The lifecycle reports the suspend as soon as the control plane
     // accepts it; the worker is only free once the actor is actually down.
     await waitFor(
-      () => readState(actorNameFor(alphaId, actorPrefix)),
+      () => readState(actorNameFor(alphaId)),
       (state) => state === "ACTOR_STATE_SUSPENDED",
       (idleSeconds + 40) * 1000,
       "alpha to leave its worker",
@@ -200,15 +192,15 @@ async function main() {
     check(
       "metrics report the conversation's lifecycle state",
       lifecycle.conversations?.[alphaId]?.state === "GRACE" &&
-        lifecycle.conversations?.[alphaId]?.actor === actorNameFor(alphaId, actorPrefix),
+        lifecycle.conversations?.[alphaId]?.actor === actorNameFor(alphaId),
       JSON.stringify(lifecycle.conversations),
     );
 
     // An actor deleted behind the gateway's back is refused by the router with
     // a 404 before the prompt is sent, so the gateway recreates it and retries.
-    await dropActor(actorNameFor(alphaId, actorPrefix));
+    await dropActor(actorNameFor(alphaId));
     await waitFor(
-      () => readState(actorNameFor(alphaId, actorPrefix)),
+      () => readState(actorNameFor(alphaId)),
       (state) => state === undefined,
       60_000,
       "alpha to be deleted",
@@ -221,7 +213,7 @@ async function main() {
     );
 
     // A kind WorkerPool is small, so free alpha's slot before beta runs.
-    await dropActor(actorNameFor(alphaId, actorPrefix));
+    await dropActor(actorNameFor(alphaId));
     const beta = await post(betaId, "say hello to beta");
     check(
       "the second conversation gets its own reply",
@@ -229,8 +221,8 @@ async function main() {
       JSON.stringify(beta.body),
     );
 
-    const alphaActor = actorNameFor(alphaId, actorPrefix);
-    const betaActor = actorNameFor(betaId, actorPrefix);
+    const alphaActor = actorNameFor(alphaId);
+    const betaActor = actorNameFor(betaId);
     check(
       "the conversation names map to distinct actors",
       alphaActor !== betaActor,
@@ -268,8 +260,7 @@ async function main() {
     // from a real conversation and makes its next turn fail with a 503, so
     // remove what this run created. Removing an actor also drops its egress
     // policy. The shell removes the gateway itself.
-    for (const conversationId of conversations)
-      await dropActor(actorNameFor(conversationId, actorPrefix));
+    for (const conversationId of conversations) await dropActor(actorNameFor(conversationId));
   }
 
   const failed = checks.filter((entry) => !entry.ok);

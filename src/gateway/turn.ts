@@ -33,8 +33,9 @@ export class TurnError extends Error {
     message: string,
     readonly phase: TurnPhase,
     readonly status?: number,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "TurnError";
   }
 }
@@ -60,6 +61,9 @@ export function sendTurn(endpoint: ActorEndpoint, actor: ActorRef, prompt: strin
       ...(endpoint.identity ? readIdentity(endpoint.identity) : {}),
     });
     let phase: TurnPhase | "settled" = "connect";
+    // Once the router's refusal is being read, it owns the failure: a close or
+    // error that follows must not replace the status with a generic message.
+    let refusing = false;
     const finish = (outcome: Reply | Error) => {
       if (phase === "settled") return;
       phase = "settled";
@@ -68,8 +72,9 @@ export function sendTurn(endpoint: ActorEndpoint, actor: ActorRef, prompt: strin
       if (outcome instanceof Error) reject(outcome);
       else resolve(outcome);
     };
-    const fail = (message: string, status?: number) => {
-      if (phase !== "settled") finish(new TurnError(message, phase, status));
+    const fail = (message: string, status?: number, cause?: unknown) => {
+      if (phase !== "settled")
+        finish(new TurnError(message, phase, status, cause === undefined ? undefined : { cause }));
     };
     const timer = setTimeout(() => fail(`turn did not settle in ${timeoutMs}ms`), timeoutMs);
 
@@ -77,6 +82,7 @@ export function sendTurn(endpoint: ActorEndpoint, actor: ActorRef, prompt: strin
     // `actor pi-agents/pi-x not found`; keep both instead of ws's bare
     // "Unexpected server response".
     socket.on("unexpected-response", (request, response: IncomingMessage) => {
+      refusing = true;
       void readRefusal(response).then((body) => {
         request.destroy();
         fail(
@@ -103,19 +109,29 @@ export function sendTurn(endpoint: ActorEndpoint, actor: ActorRef, prompt: strin
           : { text: typeof record.text === "string" ? record.text : "" },
       );
     });
-    socket.on("error", (error: Error) => fail(error.message));
-    socket.on("close", () => fail("actor connection closed during the turn"));
+    // The original error is kept as the cause: ws errors carry `code`, and a
+    // TurnError built from the message alone would lose it.
+    socket.on("error", (error: Error) => {
+      if (!refusing) fail(error.message, undefined, error);
+    });
+    socket.on("close", () => {
+      if (!refusing) fail("actor connection closed during the turn");
+    });
   });
 }
 
 function readRefusal(response: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     let body = "";
+    // A refusal whose body never completes still carries its status, so resolve
+    // on the close as well; the partial body is all the router sent.
+    const done = () => resolve(body.trim().slice(0, MAX_REFUSAL_BYTES));
     response.setEncoding("utf8");
     response.on("data", (chunk: string) => {
       if (body.length < MAX_REFUSAL_BYTES) body += chunk;
     });
-    response.on("end", () => resolve(body.trim().slice(0, MAX_REFUSAL_BYTES)));
-    response.on("error", () => resolve(body.trim()));
+    response.on("end", done);
+    response.on("close", done);
+    response.on("error", done);
   });
 }

@@ -94,9 +94,14 @@ export class IdleLifecycle {
     return resumes;
   }
 
-  /** A turn ended, successfully or not. This is the only path into GRACE. */
+  /**
+   * A turn ended, successfully or not. This is the only path into GRACE.
+   * A settle without a start is a protocol error; clamping the count would
+   * hide it.
+   */
   turnSettled(): void {
-    this.inflight = Math.max(0, this.inflight - 1);
+    if (this.inflight === 0) throw new Error("turnSettled() called with no turn in flight");
+    this.inflight -= 1;
     if (this.current !== "ACTIVE" || this.inflight > 0) return;
     this.current = "GRACE";
     this.armTimer();

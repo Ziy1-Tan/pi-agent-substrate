@@ -67,6 +67,39 @@ test("an actor that is not listening fails the turn before sending it", async ()
   );
 });
 
+test("a connection failure keeps the original error as its cause", async () => {
+  await assert.rejects(
+    sendTurn({ url: "ws://127.0.0.1:1", turnTimeoutMs: 5_000 }, actor, "hi"),
+    (error: unknown) =>
+      error instanceof TurnError &&
+      error.cause instanceof Error &&
+      /ECONNREFUSED/.test(error.cause.message),
+  );
+});
+
+test("a refusal whose body never ends still reports its status", async (t) => {
+  const router = createServer((_request, response) => {
+    response.writeHead(404, { "content-type": "text/plain" });
+    response.write("actor pi-agents/pi-test not found");
+    // Kill the connection before the body completes, so the client sees a
+    // close rather than an end.
+    setTimeout(() => response.socket?.destroy(), 25);
+  });
+  await new Promise<void>((resolve) => router.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => router.close(() => resolve())));
+  const address = router.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+
+  await assert.rejects(
+    sendTurn({ url: `ws://127.0.0.1:${port}` }, actor, "hi"),
+    (error: unknown) =>
+      error instanceof TurnError &&
+      error.phase === "connect" &&
+      error.status === 404 &&
+      error.message.startsWith("router answered 404"),
+  );
+});
+
 test("a router refusal keeps its status and reason", async (t) => {
   const router = createServer((_request, response) => {
     response.writeHead(404, { "content-type": "text/plain" });

@@ -1,11 +1,9 @@
 # The gateway answers POST /messages and walks each conversation's actor
-# through its idle lifecycle. It reaches atenet-router over HTTPS with a
-# projected podidentity client certificate; the router must list this
-# ServiceAccount's SPIFFE ID in --ingress-allowed-spiffe-ids.
-#
-# It uses kubectl-ate for the control plane. The SA may mint a token for the
-# shared ate-client ServiceAccount, which the development install makes the
-# bootstrap owner. A production install should grant a narrower role instead.
+# through its idle lifecycle. It authenticates with its projected pod
+# certificate twice: to atenet-router, which must list this ServiceAccount's
+# SPIFFE ID in --ingress-allowed-spiffe-ids, and to ate-api, where the
+# atespace's access policy grants that SPIFFE ID `editor`. ate-api's
+# NetworkPolicy admits only namespaces labeled ate.dev/api-access=true.
 #
 # GATEWAY_NAME names the Service and Deployment, so a second gateway can run
 # beside the first; GATEWAY_EGRESS_CONFIGMAP holds the per-actor policy.
@@ -13,65 +11,14 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: pi-gateway
+  labels:
+    ate.dev/api-access: "true"
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pi-gateway
   namespace: pi-gateway
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: pi-gateway-control
-  namespace: ate-system
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/portforward"]
-    verbs: ["create", "get"]
-  - apiGroups: [""]
-    resources: ["serviceaccounts/token"]
-    resourceNames: ["ate-client"]
-    verbs: ["create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: pi-gateway-control
-  namespace: ate-system
-subjects:
-  - kind: ServiceAccount
-    name: pi-gateway
-    namespace: pi-gateway
-roleRef:
-  kind: Role
-  name: pi-gateway-control
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: pi-gateway-trust
-rules:
-  - apiGroups: ["certificates.k8s.io"]
-    resources: ["clustertrustbundles"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: pi-gateway-trust
-subjects:
-  - kind: ServiceAccount
-    name: pi-gateway
-    namespace: pi-gateway
-roleRef:
-  kind: ClusterRole
-  name: pi-gateway-trust
-  apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
 kind: Service
@@ -121,12 +68,12 @@ spec:
             - name: IDLE_SECONDS
               value: "${IDLE_SECONDS}"
           volumeMounts:
-            - name: router-client
-              mountPath: /run/pi-router
+            - name: pod-identity
+              mountPath: /run/pi-identity
             - name: egress
               mountPath: /etc/pi
       volumes:
-        - name: router-client
+        - name: pod-identity
           projected:
             sources:
               - podCertificate:
@@ -138,7 +85,7 @@ spec:
                   labelSelector:
                     matchLabels:
                       podcert.ate.dev/canarying: live
-                  path: router-ca.pem
+                  path: service-ca.pem
         - name: egress
           configMap:
             name: ${GATEWAY_EGRESS_CONFIGMAP}

@@ -1,39 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { StubBackend } from "./support/stub-backend.js";
-import { startHttpServer } from "../src/gateway/server.js";
-import { GatewayManager } from "../src/gateway/manager.js";
+import { Gateway } from "../src/gateway/gateway.js";
+import { startHttpServer } from "../src/gateway/http.js";
+import { echoTurn, FakeControl } from "./support/fakes.js";
 
-interface Setup {
-  server: { port: number };
-  manager: GatewayManager;
-}
-
-async function setup(t: test.TestContext): Promise<Setup> {
-  const manager = new GatewayManager({
-    actorUrl: "ws://127.0.0.1:1",
-    control: {
-      async ensure() {},
-      async applyEgress() {},
-      async suspend() {},
-      async state() {
-        return "running" as const;
-      },
-    },
+async function setup(t: test.TestContext) {
+  const gateway = new Gateway({
+    control: new FakeControl(),
     atespace: "pi-agents",
     idleMs: 60_000,
-    createBackend: () => new StubBackend(),
+    runTurn: async (actor, prompt) =>
+      prompt === "fail" ? { text: "", error: "upstream is down" } : echoTurn()(actor, prompt),
   });
-  const server = await startHttpServer({
-    manager,
-    port: 0,
-  });
+  const server = await startHttpServer({ gateway, port: 0, log: () => undefined });
   t.after(async () => {
     await server.close();
-    await manager.close();
+    await gateway.close();
   });
-  return { server, manager };
+  return { server };
 }
 
 test("curl posts a message and reads the settled reply in the response", async (t) => {
@@ -82,6 +67,17 @@ test("a bad request is answered with a status, not a hang", async (t) => {
     body: "{",
   });
   assert.equal(notJson.status, 400);
+});
+
+test("a failed turn is answered with 502 and its reason", async (t) => {
+  const { server } = await setup(t);
+  const response = await fetch(`http://127.0.0.1:${server.port}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversation: "cli/one", text: "fail" }),
+  });
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { error: "upstream is down" });
 });
 
 test("metrics are served and unknown paths are not", async (t) => {

@@ -18,17 +18,8 @@ export interface ProviderConfig {
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 16_384;
 
-/**
- * Reads the provider from environment. Only `openai-completions` is supported
- * because it is the only wire protocol the engine's provider adapter is wired for.
- */
+/** Reads the provider from environment. The wire protocol is always `openai-completions`. */
 export function providerFromEnv(env: NodeJS.ProcessEnv): ProviderConfig {
-  const api = requireEnv(env, "PI_PROVIDER_API");
-  if (api !== "openai-completions") {
-    throw new Error(
-      `PI_PROVIDER_API=${api} is not supported by the durable engine; use openai-completions`,
-    );
-  }
   return {
     id: requireEnv(env, "PI_PROVIDER"),
     modelId: requireEnv(env, "PI_MODEL"),

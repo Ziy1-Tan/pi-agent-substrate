@@ -1,15 +1,15 @@
 /**
  * HTTP side of the gateway: one turn per request, plus metrics. It
  * deliberately knows nothing about actors or Pi; it turns a JSON body into a
- * manager call and the settled reply into JSON.
+ * gateway call and the settled reply into JSON.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { GatewayManager } from "./manager.js";
-import type { AgentResponse } from "./backend.js";
+import type { Reply } from "./turn.js";
+import type { Gateway } from "./gateway.js";
 
 export interface HttpServerOptions {
-  manager: GatewayManager;
+  gateway: Gateway;
   port?: number;
   /** Listen address; defaults to 0.0.0.0. */
   host?: string;
@@ -44,7 +44,7 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
     }
     if (url.pathname === "/metrics") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(options.manager.getMetrics().snapshot(), null, 2));
+      response.end(JSON.stringify(options.gateway.metrics(), null, 2));
       return;
     }
     response.writeHead(404, { "content-type": "text/plain" });
@@ -73,9 +73,9 @@ export async function startHttpServer(options: HttpServerOptions): Promise<HttpS
 
     // The reply is this request's own turn result, so two callers on one
     // conversation each get their own answer rather than the last to settle.
-    let reply: AgentResponse;
+    let reply: Reply;
     try {
-      reply = await options.manager.receive(conversationId, text);
+      reply = await options.gateway.receive(conversationId, text);
     } catch (error) {
       respond(response, 502, { error: describe(error) });
       return;

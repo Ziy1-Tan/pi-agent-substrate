@@ -9,8 +9,7 @@
  *
  *   PI_BRIDGE_PORT                 WebSocket port inside the sandbox (default 8787)
  *   PI_PROVIDER / PI_MODEL         Provider id and model id the Harness calls
- *   PI_PROVIDER_BASE_URL           Provider endpoint
- *   PI_PROVIDER_API                Wire protocol; only openai-completions is supported
+ *   PI_PROVIDER_BASE_URL           OpenAI-compatible endpoint (openai-completions)
  *   PI_PROVIDER_API_KEY_ENV        Name of the env var holding the key (egress-injected)
  *   PI_MODEL_CONTEXT_WINDOW        Optional, default 128000
  *   PI_MODEL_MAX_TOKENS            Optional, default 16384
@@ -33,6 +32,7 @@ if (process.env[provider.apiKeyEnv] === undefined)
   process.env[provider.apiKeyEnv] = "egress-injected";
 
 const bridge = await startBridge({
+  port: Number(process.env.PI_BRIDGE_PORT ?? 8787),
   storageDir: STORAGE_DIR,
   workspace: WORKSPACE,
   provider,

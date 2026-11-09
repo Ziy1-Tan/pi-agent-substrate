@@ -1,204 +1,77 @@
 # Pi-agent-substrate
 
-Runtime traps from running against a live kind cluster; architecture is in
-[docs/architecture.md](docs/architecture.md).
+Traps found by running against a live kind cluster. Each one is something the
+code and the docs around it do not show. Architecture is in
+[docs/architecture.md](docs/architecture.md), setup in [README.md](README.md),
+and the reason behind each manifest field sits in a comment next to it.
 
-## Egress
+## Egress failures
 
-An actor has no network access until an `EgressPolicy` names a destination.
-A missing policy is not an error: the turn settles with no text, which is why
-the manager calls `provision` first. Two other failures surface as Pi's bare
-`Connection error.`
+An actor without an `EgressPolicy` gets no error. Its turn settles with no
+text, and that is why the gateway calls `applyEgress` before the first message.
 
-### An `http` rule does not authorize HTTPS
+Two other egress mistakes both surface as Pi's bare `Connection error.`:
 
-`Policy.SNIRules(port)` emits rules only for `https` and `tls_passthrough`, so
-an `http` rule leaves `sniRules: 0` and the handshake fails with
-`filter_chain_not_found`. Use `https:` for anything reached over TLS.
+- An `http` rule does not authorize HTTPS. `Policy.SNIRules(port)` emits rules
+  only for `https` and `tls_passthrough`, so an `http` rule leaves
+  `sniRules: 0` and the handshake fails with `filter_chain_not_found`. This
+  fails instantly and never reaches the destination.
+- An untrusted egress CA (see the trust-bundle comment in
+  `deploy/actor-template.yaml`) gets through the handshake. The egress byte
+  counters move, and Pi gives up in well under a second.
 
-### An `https` rule requires trusting the egress CA
+Both are logged under `grep 'egress denied'` in
+`kubectl -n ate-system logs deploy/atenet-egress -c ext-proc`.
 
-TLS terminates at the gateway, which mints a leaf from its own CA that chains
-to no public root. Mount the projected bundle:
+## Golden snapshots and the wakeup probe
 
-```yaml
-volumes:
-  - name: system-info
-    systemInfo:
-      dataSources:
-        - trustBundle:
-            names: [egress-mitm.ate.dev, system-roots.ate.dev]
-            path: egress-trust-bundle/trust-bundle.pem
-```
-
-and set `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` to
-`/run/ate/egress-trust-bundle/trust-bundle.pem`. A missing SNI rule fails
-instantly without reaching the destination; a trust failure completes the
-handshake (egress byte counters move) and Pi gives up in well under a second.
-Both log under `grep 'egress denied'` in `kubectl -n ate-system logs
-deploy/atenet-egress -c ext-proc`.
-
-## Credential injection
-
-Pi sends the key in the header its wire API uses. OpenAI-compatible APIs send
-`Authorization: Bearer <apiKey>`; Anthropic-compatible APIs send
-`x-api-key: <apiKey>`. The actor reads the placeholder from the variable named
-by `PI_PROVIDER_API_KEY_ENV`, and the policy replaces that header:
-
-```yaml
-# openai-completions / openai-responses
-effects: {replaceHeaders: [{header: Authorization, prefix: "Bearer ",
-  credentialUri: "ate-secret://k8s.io/default/<ns>/<secret>/api-key"}]}
-
-# anthropic-messages
-effects: {replaceHeaders: [{header: x-api-key,
-  credentialUri: "ate-secret://k8s.io/default/<ns>/<secret>/api-key"}]}
-```
-
-Replacing the wrong header leaves the placeholder in place, and the provider
-rejects the request.
-
-The provider is default-deny: the policy ConfigMap ships as `policies: []`, so
-every injection returns 403 until the atespace is listed. It reads that
-ConfigMap once at startup, so restart the deployment after editing.
-
-## v1.0.0 schema
-
-A template name and an actor name may not contain dots: `pi-local-v1.0.0` is
-rejected with `must not contain dots`. Use dashes (`pi-local-v1-0-0`).
-
-`deploy/actor-template.yaml` follows the v1.0.0 protojson schema:
-no `sandboxConfig`, no `snapshotConfig.storageLocation` (it needs the
-`PerTemplateSnapshotLocation` preview gate), and limits in integer units
-(`cpuMillicores`, `memoryBytes`), not Kubernetes quantities. The sandbox class
-is selected by `workerSelector.matchLabels`, matched against the WorkerPool's
-labels; there is no template field for it. WorkerPools are `ate.dev/v1`.
-
-`kubectl ate delete actor` no longer accepts `--any-state`. The old install and
-cluster-creation scripts are gone; install Substrate with its own `ate-setup`
-command.
-
-## Templates
-
-### A wakeup probe disables the golden-snapshot warmup
-
-`goldenSnapshotWarmupFor` in `cmd/ateapi/internal/controlapi/template_reconciler.go`
-returns 0 when every container declares a `wakeupProbe`, and the 20s
-`goldenSnapshotWarmup` constant otherwise. The reasoning is that `ResumeActor`
-already blocked until the probe reported 200, so the workload must be
-initialized. That holds for a service that answers its health check only once
-it is fully up; it does not hold for a Node process that answers as soon as it
-binds a port.
-
-The bridge used to do the latter. `/healthz` returned 200 about 500ms after
-start, so the golden actor was checkpointed at 500ms, and the restored sandbox
-came back with a bridge that never listened again. The wakeup probe on the next
-resume timed out after 30s, the actor went `CRASHED`, and atenet-router
-answered the message with a 503. The two timings, measured on the same code:
+`goldenSnapshotWarmupFor` in
+`cmd/ateapi/internal/controlapi/template_reconciler.go` (Substrate) returns 0
+when every container declares a `wakeupProbe`. Otherwise it returns the
+hard-coded 20s `goldenSnapshotWarmup`, and no flag, env, or template field
+changes that value. The bridge's `/healthz` answers about 500ms after start.
+With a probe declared, the golden actor was checkpointed at 500ms, and the
+restored bridge never listened again. The next resume's probe timed out after
+30s, the actor went `CRASHED`, and atenet-router answered with a 503:
 
 ```
 with probe:     Actor started 00.814 -> Actor checkpointing 01.329   (515ms)
 without probe:  Actor started 00.814 -> Actor checkpointing 30.830   (20.5s)
 ```
 
-The 20s is hard-coded: no flag, env, or template field changes it. The template
-therefore declares no probe, and gets the conservative wall-clock warmup.
+So the template declares no probe. That position is fragile. Upstream dropped a
+tunable warmup (#487) in favour of honest readiness endpoints, and #2068 moves
+toward requiring a probe on every container. If that lands, `/healthz` must
+return 503 until the process is older than the warmup. Process age survives a
+restore (`/proc/uptime` advanced by the wall-clock gap across a
+suspend/resume), so a restored actor passes the gate at once and only a cold
+start waits. A cold-start snapshot fidelity would need the same change, since
+`ResumeActor` no longer waits for the workload.
 
-That fallback is not a stable place to stand. Upstream proposed a tunable
-warmup in #487 and dropped the idea, on the grounds that a workload which
-cannot report readiness needs a readiness endpoint rather than a longer timer;
-the merged change was a configurable probe timeout instead. #2068 then moved
-toward requiring a probe on every container and deleting the 20s fallback. If
-that lands, this template stops being accepted. The migration is to make
-`/healthz` answer honestly: return 503 until the process is older than the
-warmup, so the probe can return with the template. Process age survives a
-restore (the sandbox clock keeps running across suspend; `/proc/uptime`
-advanced by the wall-clock gap through a suspend/resume cycle), so a restored
-actor passes the gate immediately and only a cold start waits.
+## Gateway access to ate-api
 
-This affects golden snapshots only. An ordinary actor is snapshotted by its
-idle-suspend, long after the bridge settled, so the probe would not matter
-there. It does matter for `ResumeActor`, which no longer waits for the workload
-at all: fine while the template uses `SNAPSHOT_FIDELITY_MEMORY`, since the
-listener comes back inside the snapshot, but a cold-start fidelity would need
-the probe again — and that is the other case the `/healthz` change above
-covers.
+The gateway calls ate-api as its pod certificate's SPIFFE ID, so it needs no
+Kubernetes RBAC. Two things outside the code decide whether a call gets
+through. A namespace without the `ate.dev/api-access=true` label is dropped by
+ate-api's NetworkPolicy, which looks like a gRPC timeout rather than a denial.
+Deleting an atespace deletes its access policy, so a recreated atespace denies
+the gateway until `deploy/` grants it again.
 
-### A template is immutable
+A denied call names the principal with `:` percent-encoded; decode it before
+putting it in a policy.
 
-A template is immutable; changing the image, env, or limits needs a new name,
-and `AlreadyExists` on a rerun is expected. Pin images by the platform manifest
-digest: `docker inspect` reports the multi-arch index, and pulling that index
-can yield a partial image that never starts, with no symptom beyond `CRASHED`
-after a wakeup probe timeout.
+always-on-agent shells out to `kubectl-ate` because its GKE cluster gives a
+plain Deployment no pod certificate. That reason does not apply here.
 
-```bash
-curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
-  "http://localhost:5001/v2/pi-actor/manifests/local" |
-  jq -r '.manifests[]|select(.platform.architecture=="arm64")|.digest'
-```
+## Local environment
 
-## Suspend and resume
-
-Connecting to the bridge wakes the actor, so a transport must never reconnect
-on its own: one suspend becomes a permanent wake loop. The next turn's
-`connect()` is the only wake signal. `turnStarted()` increments an in-flight
-count that only `turnSettled()` decrements; a failure that skips the settle
-blocks every later settle and pins a worker forever, so the gateway settles in
-`finally`.
-
-## Reporting failures
-
-Pi reports a provider failure on the final assistant message (`stopReason:
-"error"` plus `errorMessage`), and an exhausted retry emits `auto_retry_end`
-with `success: false` and `finalError`. Without both, a failed turn looks like
-one that produced no text. The bridge sends `bridge_result` before Pi's own
-`agent_settled`, because the gateway settles on the first record it sees.
-
-The bridge turns retries off (`settings.retry.enabled: false`) so a failure
-reaches the gateway at once. A test that exercises retries must enable them, or
-pick a timeout that allows for the backoff.
-
-## In-cluster gateway
-
-The local deployment runs the gateway as a Deployment in `pi-gateway`, not on
-the workstation. It reaches actors over `wss://atenet-router.ate-system.svc:443`
-with a projected podidentity client certificate; the router must list
-`spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway` in
-`--ingress-allowed-spiffe-ids`. `deploy/local.sh` checks this and stops early
-when it is missing.
-
-Three permissions are easy to miss. `kubectl-ate` resolves the ate-api Service
-before port-forwarding, so the SA needs `get,list` on `services` in
-`ate-system`, and the port-forward upgrade is authorized as `get` (not only
-`create`) on `pods/portforward`. It also mints a token for the shared
-`ate-client` ServiceAccount, needing `create` on `serviceaccounts/token` with
-that `resourceName`.
-
-The projected credential bundle is one PEM with the private key first and the
-certificate chain second. Node rejects that file as `cert` with
-`PEM routines::no start line`; `src/gateway/websocket.ts` splits the blocks on
-every connect so a rotated credential is picked up.
-
-## Local deployment
-
-`deploy/local.sh` builds the actor and gateway images, creates the
-atespace, the WorkerPool, the template (`pi-local-v1-0-0` by default), the
-provider Secret, the atespace's credential-provider grant, and the in-cluster
-gateway. The provider values come from `deploy/provider.env`; the key
-goes to a Secret and never enters the actor. The bridge builds the Harness
-from the non-secret values.
-
-The gateway creates the actor on the first message, named from the
-conversation id (`local/chat` → `pi-local-chat`). `ACTOR_TEMPLATE` defaults
-to `pi-actor` while a local deploy creates `pi-local-v1-0-0`; override it when
-running the gateway by hand.
-
-The local registry can hold an old `ateom-microvm:latest` from a source build
-that rejects the controller's `--pod-ips` flag. Pull the release worker image
-and push it under a version tag instead (the deploy needs
-`WORKER_IMAGE=localhost:5001/ateworker-microvm:v1.0.0` on this host).
-
-`read` fails on input without a trailing newline, which ends the script under
-`errexit`. zsh's nvm loader breaks `node` in compound commands; use `bash -lc`
-(or the absolute binary path).
+- `kubectl ate delete actor` no longer accepts `--any-state`.
+- Running the gateway by hand: `ACTOR_TEMPLATE` defaults to `pi-actor` in
+  `src/gateway/main.ts`, while `deploy/local.sh` creates `pi-local-v1-0-0`.
+- A stale `ateom-microvm:latest` in the local registry rejects the
+  controller's `--pod-ips` flag. On this host the deploy needs
+  `WORKER_IMAGE=localhost:5001/ateworker-microvm:v1.0.0`.
+- `read` fails on input without a trailing newline, which ends a script under
+  `errexit`.
+- zsh's nvm loader breaks `node` in compound commands. Use `bash -lc` or the
+  absolute binary path.

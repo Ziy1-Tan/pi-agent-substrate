@@ -62,14 +62,14 @@ without nested virtualization, add `--sandbox-classes=gvisor`.
 
 ```sh
 cp deploy/provider.env.example deploy/provider.env
-$EDITOR deploy/provider.env            # provider, model, endpoint, API, key
+$EDITOR deploy/provider.env            # provider, model, endpoint, key
 KUBE_CONTEXT=kind-pi-v1 ./deploy/local.sh                       # real model
 KUBE_CONTEXT=kind-pi-v1 ./deploy/e2e.sh                          # mock model
 ```
 
 `deploy/local.sh` builds the actor and gateway images, creates the atespace,
 the WorkerPool, the actor template, the provider Secret, the egress policy,
-and the in-cluster gateway. It prints the port-forward command for the
+the gateway's ate-api access policy, and the in-cluster gateway. It prints the port-forward command for the
 gateway's HTTP API. The gateway creates the conversation's actor on the first
 message. The e2e needs no key or network.
 
@@ -80,24 +80,23 @@ registry's `latest` tag; set `WORKER_IMAGE` to the release image, for example
 
 ### Provider settings
 
-A single model call needs five values. They live in
+A single model call needs four values. They live in
 `deploy/provider.env`, which is gitignored:
 
-| Variable               | Meaning                                                    |
-| ---------------------- | ---------------------------------------------------------- |
-| `PI_PROVIDER`          | Provider id the Harness registers                          |
-| `PI_MODEL`             | Model id the Harness calls                                 |
-| `PI_PROVIDER_BASE_URL` | Endpoint, e.g. `https://api.example.com/v1`                |
-| `PI_PROVIDER_API`      | Wire protocol; only `openai-completions` is supported      |
-| `PI_PROVIDER_API_KEY`  | Key, written to a Kubernetes Secret and injected on egress |
+| Variable               | Meaning                                                       |
+| ---------------------- | ------------------------------------------------------------- |
+| `PI_PROVIDER`          | Provider id the Harness registers                             |
+| `PI_MODEL`             | Model id the Harness calls                                    |
+| `PI_PROVIDER_BASE_URL` | OpenAI-compatible endpoint, e.g. `https://api.example.com/v1` |
+| `PI_PROVIDER_API_KEY`  | Key, written to a Kubernetes Secret and injected on egress    |
 
 The actor defaults `contextWindow` to 128000 and `maxTokens` to 16384. Set
 `PI_MODEL_CONTEXT_WINDOW` or `PI_MODEL_MAX_TOKENS` only when the model differs.
 `PI_TOOLS=bash` gives the agent a shell in `/workspace`; the default is no tools.
 
-The endpoint and API go into the actor template. The key does not: the actor
+The endpoint goes into the actor template. The key does not: the actor
 sends a placeholder header, which the EgressPolicy replaces with the value
-from the Secret. With `openai-completions` that header is
+from the Secret. The actor speaks `openai-completions`, so that header is
 `Authorization: Bearer`.
 
 ### Talk to it
@@ -128,9 +127,9 @@ in-cluster pod identity provides.
 | `EGRESS_POLICY`  | `/etc/pi/egress-policy.yaml` | Applied to each new actor                   |
 | `IDLE_SECONDS`   | `60`                         | Idle window before suspend; `0` disables it |
 
-The router URL and its client certificate are fixed by the Deployment: the
-gateway runs in the cluster and speaks to `atenet-router` with its projected
-podidentity certificate. `PI_*` variables configure Pi itself and are read by
+The router and ate-api addresses and the client certificate are fixed by the
+Deployment: the gateway runs in the cluster and authenticates to both with its
+projected podidentity certificate. `PI_*` variables configure Pi itself and are read by
 the actor, not the gateway.
 
 ## How it works

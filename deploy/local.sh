@@ -24,7 +24,7 @@
 #   IDLE_SECONDS      idle window before suspend (default: 60)
 #   REGISTRY          image registry (default: localhost:5001)
 #   PROVIDER_ENV      provider config file (default: deploy/provider.env)
-#   PI_PROVIDER / PI_MODEL / PI_PROVIDER_BASE_URL / PI_PROVIDER_API /
+#   PI_PROVIDER / PI_MODEL / PI_PROVIDER_BASE_URL /
 #   PI_PROVIDER_API_KEY
 #                     source provider values, normally from provider.env
 #
@@ -36,22 +36,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=deploy/lib.sh
 . "${ROOT}/deploy/lib.sh"
-
-# The gateway image runs kubectl-ate inside a Linux container, so the binary it
-# copies must be a Linux one. On a Linux host the installed binary already is;
-# elsewhere set KUBECTL_ATE_LINUX to a linux build of the same release.
-gateway_kubectl_ate() { # <target-file>
-	local target="$1" src
-	if [[ -n "${KUBECTL_ATE_LINUX:-}" ]]; then
-		src="${KUBECTL_ATE_LINUX}"
-	elif [[ "$(uname -s)" == "Linux" ]]; then
-		src="$(command -v "${KUBECTL_ATE}")"
-	else
-		echo "the gateway image needs a Linux kubectl-ate: set KUBECTL_ATE_LINUX" >&2
-		return 1
-	fi
-	cp "${src}" "${target}"
-}
 
 SUBSTRATE_VERSION="$(node -p "require('./package.json').substrateVersion")"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
@@ -105,7 +89,6 @@ require() {
 require "${PI_PROVIDER:-}" PI_PROVIDER
 require "${PI_MODEL:-}" PI_MODEL
 require "${PI_PROVIDER_BASE_URL:-}" PI_PROVIDER_BASE_URL
-require "${PI_PROVIDER_API:-}" PI_PROVIDER_API
 require "${PI_PROVIDER_API_KEY:-}" PI_PROVIDER_API_KEY
 
 if [[ "${SANDBOX_CLASS_NAME}" == "microvm" ]]; then
@@ -116,13 +99,18 @@ if [[ "${SANDBOX_CLASS_NAME}" == "microvm" ]]; then
   fi
 fi
 
-# Pi sends the key in the header its wire API uses. Anthropic uses x-api-key;
-# the OpenAI-compatible APIs use an Authorization bearer token.
-case "${PI_PROVIDER_API}" in
-  anthropic-messages) AUTH_HEADER=x-api-key; AUTH_PREFIX="" ;;
-  openai-completions|openai-responses) AUTH_HEADER=Authorization; AUTH_PREFIX="Bearer " ;;
-  *) echo "unsupported PI_PROVIDER_API: ${PI_PROVIDER_API}" >&2; exit 1 ;;
-esac
+# The actor speaks openai-completions only, which sends the key as an
+# Authorization bearer token.
+AUTH_HEADER=Authorization
+AUTH_PREFIX="Bearer "
+
+# The gateway reaches actors through the router, which admits only listed
+# workload identities. Check before building anything.
+if ! "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get deploy atenet-router -o yaml 2>/dev/null | grep -q "${GATEWAY_SPIFFE_ID}"; then
+  echo "atenet-router does not allow ${GATEWAY_SPIFFE_ID}" >&2
+  echo "reinstall substrate with --ingress-allowed-spiffe-ids=${GATEWAY_SPIFFE_ID}" >&2
+  exit 1
+fi
 
 echo "==> building and pushing the actor image"
 npm run build
@@ -146,8 +134,6 @@ fi
 ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 
 echo "==> building and pushing the gateway image"
-mkdir -p bin
-gateway_kubectl_ate bin/kubectl-ate
 docker build -t "${GATEWAY_IMAGE}" -f deploy/gateway.Dockerfile .
 docker push "${GATEWAY_IMAGE}"
 
@@ -155,6 +141,7 @@ echo "==> ensuring atespace ${ATESPACE}"
 if ! "${ate[@]}" get atespace "${ATESPACE}" >/dev/null 2>&1; then
   "${ate[@]}" create atespace "${ATESPACE}"
 fi
+grant_gateway_access "${ate[@]}"
 
 # The worker image tracks the installed substrate. Prefer what an existing
 # pool of this class already runs; fall back to the release image.
@@ -250,15 +237,8 @@ if ! printf '%s' "${tag}" | grep -qE '[0-9a-f]{8}-'; then
   exit 1
 fi
 
-gateway_spiffe="spiffe://cluster.local/ns/pi-gateway/sa/pi-gateway"
-if ! "${kube[@]}" -n "${SUBSTRATE_NAMESPACE}" get deploy atenet-router -o yaml 2>/dev/null | grep -q "${gateway_spiffe}"; then
-  echo "atenet-router does not allow ${gateway_spiffe}" >&2
-  echo "reinstall substrate with --ingress-allowed-spiffe-ids=${gateway_spiffe}" >&2
-  exit 1
-fi
-
 echo "==> creating the gateway namespace and inputs"
-"${kube[@]}" create namespace pi-gateway --dry-run=client -o yaml | "${kube[@]}" apply -f -
+apply_gateway_namespace
 "${kube[@]}" -n pi-gateway create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
   --from-file=egress-policy.yaml="${RENDERED_POLICY}" \
   --dry-run=client -o yaml | "${kube[@]}" apply -f -

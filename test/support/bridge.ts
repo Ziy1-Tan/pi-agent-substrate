@@ -86,17 +86,17 @@ export async function startMockLlm(text: string): Promise<{
   };
 }
 
-export interface BridgeHarness {
+export interface TestBridge {
   bridge: Bridge;
   llm: Awaited<ReturnType<typeof startMockLlm>>;
   open(): Promise<BridgeClient>;
   close(): Promise<void>;
 }
 
-export async function createBridgeHarness(
+export async function startTestBridge(
   text = "Hello from pi rpc.",
   options: { log?: (message: string) => void; tools?: "none" | "bash" } = {},
-): Promise<BridgeHarness> {
+): Promise<TestBridge> {
   const root = await mkdtemp(join(tmpdir(), "pi-bridge-"));
   const llm = await startMockLlm(text);
   const workspace = join(root, "workspace");
@@ -129,14 +129,13 @@ export function mockProviderEnv(baseUrl: string): NodeJS.ProcessEnv {
     PI_PROVIDER: "mock",
     PI_MODEL: "mock-model",
     PI_PROVIDER_BASE_URL: baseUrl,
-    PI_PROVIDER_API: "openai-completions",
     PI_PROVIDER_API_KEY_ENV: "MOCK_KEY",
     MOCK_KEY: "mock-key",
   };
 }
 
 export class BridgeClient {
-  readonly events: Array<Record<string, unknown>> = [];
+  readonly results: Array<Record<string, unknown>> = [];
   private readonly socket: WebSocket;
   private waiters: Array<() => void> = [];
 
@@ -148,7 +147,7 @@ export class BridgeClient {
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
     const client = new BridgeClient(socket);
     socket.on("message", (data: Buffer) => {
-      client.events.push(JSON.parse(String(data)) as Record<string, unknown>);
+      client.results.push(JSON.parse(String(data)) as Record<string, unknown>);
       for (const wake of client.waiters.splice(0)) wake();
     });
     await new Promise<void>((resolveOpen, reject) => {
@@ -158,31 +157,32 @@ export class BridgeClient {
     return client;
   }
 
-  send(command: Record<string, unknown>): void {
-    this.socket.send(JSON.stringify(command));
+  /** Sends a turn and waits for the result carrying its id. */
+  async turn(id: string, prompt: string, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+    this.socket.send(JSON.stringify({ id, prompt }));
+    return this.waitFor((result) => result.id === id, timeoutMs);
+  }
+
+  sendRaw(payload: string): void {
+    this.socket.send(payload);
   }
 
   async waitFor(
-    predicate: (event: Record<string, unknown>) => boolean,
+    predicate: (result: Record<string, unknown>) => boolean,
     timeoutMs = 30_000,
   ): Promise<Record<string, unknown>> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const found = this.events.find(predicate);
+      const found = this.results.find(predicate);
       if (found) return found;
       if (Date.now() > deadline) {
-        throw new Error(`timed out; last events: ${JSON.stringify(this.events.slice(-5))}`);
+        throw new Error(`timed out; last results: ${JSON.stringify(this.results.slice(-5))}`);
       }
-      await new Promise<void>((resolveWait) => this.waiters.push(resolveWait));
+      await new Promise<void>((resolveWait) => {
+        this.waiters.push(resolveWait);
+        setTimeout(resolveWait, 100).unref();
+      });
     }
-  }
-
-  async request(
-    command: Record<string, unknown>,
-    timeoutMs = 30_000,
-  ): Promise<Record<string, unknown>> {
-    this.send(command);
-    return this.waitFor((event) => event.type === "response" && event.id === command.id, timeoutMs);
   }
 
   async close(): Promise<void> {

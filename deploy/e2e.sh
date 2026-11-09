@@ -26,22 +26,6 @@ cd "${ROOT}"
 # shellcheck source=deploy/lib.sh
 . "${ROOT}/deploy/lib.sh"
 
-# The gateway image runs kubectl-ate inside a Linux container, so the binary it
-# copies must be a Linux one. On a Linux host the installed binary already is;
-# elsewhere set KUBECTL_ATE_LINUX to a linux build of the same release.
-gateway_kubectl_ate() { # <target-file>
-	local target="$1" src
-	if [[ -n "${KUBECTL_ATE_LINUX:-}" ]]; then
-		src="${KUBECTL_ATE_LINUX}"
-	elif [[ "$(uname -s)" == "Linux" ]]; then
-		src="$(command -v "${KUBECTL_ATE}")"
-	else
-		echo "the gateway image needs a Linux kubectl-ate: set KUBECTL_ATE_LINUX" >&2
-		return 1
-	fi
-	cp "${src}" "${target}"
-}
-
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
 REGISTRY="${REGISTRY:-localhost:5001}"
@@ -70,11 +54,9 @@ if [[ "${ONLY}" != "e2e" ]]; then
   docker build -t "${REGISTRY}/pi-actor:local" -f deploy/actor.Dockerfile .
 
   echo "==> building the mock LLM image"
-  docker build -t "${REGISTRY}/pi-mock-llm:local" -f deploy/mock-llm/Dockerfile deploy/mock-llm
+  docker build -t "${REGISTRY}/pi-mock-llm:local" -f deploy/e2e/mock-llm/Dockerfile deploy/e2e/mock-llm
 
   echo "==> building the gateway image"
-  mkdir -p bin
-  gateway_kubectl_ate bin/kubectl-ate
   docker build -t "${GATEWAY_IMAGE}" -f deploy/gateway.Dockerfile .
 
   echo "==> pushing to ${REGISTRY}"
@@ -113,7 +95,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
     envsubst '${ATESPACE} ${WORKERPOOL_NAME} ${SANDBOX_CLASS_NAME} ${SANDBOX_CONFIG_NAME} ${WORKER_IMAGE}' \
     < deploy/workerpool.yaml | "${kube[@]}" apply -f -
   ATESPACE="${ATESPACE}" MOCK_LLM_IMAGE="${MOCK_LLM_IMAGE}" \
-    envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/mock-llm.yaml | "${kube[@]}" apply -f -
+    envsubst '${ATESPACE} ${MOCK_LLM_IMAGE}' < deploy/e2e/mock-llm.yaml | "${kube[@]}" apply -f -
   # The tag does not change between runs, so apply alone keeps the old pod.
   "${kube[@]}" -n "${ATESPACE}" rollout restart deploy/mock-llm
 
@@ -124,7 +106,6 @@ if [[ "${ONLY}" != "e2e" ]]; then
   PI_PROVIDER=mock
   PI_MODEL=mock-model
   PI_PROVIDER_BASE_URL="http://mock-llm.${ATESPACE}.svc.cluster.local:8080/v1"
-  PI_PROVIDER_API=openai-completions
   # The mock scripts bash tool calls, so the e2e actor needs the shell tool.
   PI_TOOLS=bash
   render_actor_template bin/actor-template.yaml "${ACTOR_IMAGE}"
@@ -166,6 +147,7 @@ if [[ "${ONLY}" != "e2e" ]]; then
     echo "    creating atespace ${ATESPACE}"
     "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create atespace "${ATESPACE}"
   fi
+  grant_gateway_access "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"}
   "${KUBECTL_ATE}" ${KUBE_CONTEXT:+--context "${KUBE_CONTEXT}"} create actor-template -f bin/actor-template.yaml
 
   echo "==> waiting for the golden snapshot"
@@ -183,9 +165,9 @@ fi
 
 if [[ "${ONLY}" != "deploy" ]]; then
   echo "==> deploying the e2e gateway"
-  "${kube[@]}" create namespace pi-gateway --dry-run=client -o yaml | "${kube[@]}" apply -f -
+  apply_gateway_namespace
   "${kube[@]}" -n pi-gateway create configmap "${GATEWAY_EGRESS_CONFIGMAP}" \
-    --from-file=egress-policy.yaml=deploy/mock-egress.yaml \
+    --from-file=egress-policy.yaml=deploy/e2e/egress-policy.yaml \
     --dry-run=client -o yaml | "${kube[@]}" apply -f -
   # Start from an empty deployment so the metrics counters describe this run.
   "${kube[@]}" -n pi-gateway delete deploy/"${GATEWAY_NAME}" svc/"${GATEWAY_NAME}" \
@@ -205,7 +187,7 @@ if [[ "${ONLY}" != "deploy" ]]; then
     KUBECTL_ATE="${KUBECTL_ATE}" KUBE_CONTEXT="${KUBE_CONTEXT}" \
     E2E_IDLE_SECONDS="${IDLE_SECONDS}" E2E_HTTP_PORT="${HTTP_PORT}" \
     E2E_CONVERSATIONS="${CONVERSATIONS}" \
-    node deploy/checks.js
+    node deploy/e2e/checks.js
 
   echo "==> removing the e2e gateway"
   kill "${gateway_forward}" 2>/dev/null || true

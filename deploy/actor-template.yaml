@@ -11,8 +11,7 @@
 #   ATESPACE           atespace that holds the actor
 #   PROVIDER           provider id
 #   MODEL_ID           model id
-#   BASE_URL           provider endpoint
-#   API                wire protocol, e.g. openai-completions
+#   BASE_URL           OpenAI-compatible (openai-completions) endpoint
 #   CONTEXT_WINDOW     model context window
 #   MAX_TOKENS         model output limit
 #   TOOLS              none or bash
@@ -44,8 +43,6 @@ containers:
         value: "egress-injected"
       - name: PI_PROVIDER_BASE_URL
         value: "${BASE_URL}"
-      - name: PI_PROVIDER_API
-        value: "${API}"
       - name: PI_MODEL_CONTEXT_WINDOW
         value: "${CONTEXT_WINDOW}"
       - name: PI_MODEL_MAX_TOKENS

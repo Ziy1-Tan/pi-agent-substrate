@@ -37,6 +37,22 @@ cd "${ROOT}"
 # shellcheck source=deploy/lib.sh
 . "${ROOT}/deploy/lib.sh"
 
+# The gateway image runs kubectl-ate inside a Linux container, so the binary it
+# copies must be a Linux one. On a Linux host the installed binary already is;
+# elsewhere set KUBECTL_ATE_LINUX to a linux build of the same release.
+gateway_kubectl_ate() { # <target-file>
+	local target="$1" src
+	if [[ -n "${KUBECTL_ATE_LINUX:-}" ]]; then
+		src="${KUBECTL_ATE_LINUX}"
+	elif [[ "$(uname -s)" == "Linux" ]]; then
+		src="$(command -v "${KUBECTL_ATE}")"
+	else
+		echo "the gateway image needs a Linux kubectl-ate: set KUBECTL_ATE_LINUX" >&2
+		return 1
+	fi
+	cp "${src}" "${target}"
+}
+
 SUBSTRATE_VERSION="$(node -p "require('./package.json').substrateVersion")"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-kind}"
 KUBECTL_ATE="${KUBECTL_ATE:-kubectl-ate}"
@@ -131,7 +147,7 @@ ACTOR_IMAGE="${REGISTRY}/pi-actor@${ACTOR_DIGEST}"
 
 echo "==> building and pushing the gateway image"
 mkdir -p bin
-cp "$(command -v "${KUBECTL_ATE}")" bin/kubectl-ate
+gateway_kubectl_ate bin/kubectl-ate
 docker build -t "${GATEWAY_IMAGE}" -f deploy/gateway.Dockerfile .
 docker push "${GATEWAY_IMAGE}"
 
